@@ -1,0 +1,8 @@
+# Project Status File
+# LLM・AIエージェントが定期レビューに使うファイルです。git 管理対象です。
+status: develop
+created: 2026-06-25
+description: （未記入）
+github: 
+last_reviewed:
+notes:

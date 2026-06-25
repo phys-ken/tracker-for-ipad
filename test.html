@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Physics Tracker - Automatic Test Suite</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #121214;
+            color: #e1e1e6;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        h1 {
+            border-bottom: 2px solid #29292e;
+            padding-bottom: 10px;
+            font-size: 24px;
+        }
+        .test-group {
+            background: #202024;
+            border: 1px solid #29292e;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+        .test-group-header {
+            background: #29292e;
+            padding: 10px 15px;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .test-case {
+            padding: 10px 15px;
+            border-bottom: 1px solid #29292e;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .test-case:last-child {
+            border-bottom: none;
+        }
+        .test-name {
+            flex: 1;
+            min-width: 250px;
+        }
+        .status-pass {
+            color: #04d361;
+            font-weight: bold;
+        }
+        .status-fail {
+            color: #f75a68;
+            font-weight: bold;
+        }
+        .summary {
+            background: #202024;
+            border: 1px solid #29292e;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
+        .btn-run {
+            background: #04d361;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .btn-run:hover {
+            opacity: 0.9;
+        }
+        #app-frame {
+            width: 100%;
+            height: 500px;
+            border: 1px solid #29292e;
+            border-radius: 8px;
+            background: #000;
+            margin-top: 20px;
+        }
+        .log-area {
+            background: #000;
+            color: #00ff00;
+            font-family: monospace;
+            padding: 10px;
+            border-radius: 4px;
+            height: 150px;
+            overflow-y: auto;
+            margin-top: 15px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Physics Tracker - 自動テストスイート</h1>
+        
+        <div class="summary" id="test-summary">
+            テストがまだ実行されていません。「テスト実行」ボタンを押してください。
+        </div>
+        
+        <button class="btn-run" id="btn-run-tests">テスト実行</button>
+        
+        <div id="test-results">
+            <!-- テスト結果がここに挿入されます -->
+        </div>
+
+        <h3>アプリケーションプレビュー (テスト用)</h3>
+        <iframe id="app-frame" src="index.html"></iframe>
+
+        <h3>テストログ</h3>
+        <div class="log-area" id="log-output"></div>
+    </div>
+
+    <script>
+        const iframe = document.getElementById('app-frame');
+        const logOutput = document.getElementById('log-output');
+        const summaryDiv = document.getElementById('test-summary');
+        const resultsDiv = document.getElementById('test-results');
+        const runBtn = document.getElementById('btn-run-tests');
+
+        function log(msg) {
+            const time = new Date().toLocaleTimeString();
+            logOutput.textContent += `[${time}] ${msg}\n`;
+            logOutput.scrollTop = logOutput.scrollHeight;
+            console.log(`[TEST] ${msg}`);
+        }
+
+        function clearLog() {
+            logOutput.textContent = '';
+        }
+
+        function assert(cond, msg) {
+            if (!cond) throw new Error(msg || "Assertion failed");
+        }
+
+        function assertEq(actual, expected, msg) {
+            if (actual !== expected) {
+                throw new Error(`${msg || "Assertion failed"}: expected ${expected}, got ${actual}`);
+            }
+        }
+
+        function assertClose(actual, expected, tolerance = 0.001, msg = "") {
+            if (Math.abs(actual - expected) > tolerance) {
+                throw new Error(`${msg}: expected close to ${expected} (tol ${tolerance}), got ${actual}`);
+            }
+        }
+
+        const testGroups = [];
+
+        function addTestGroup(name, cases) {
+            testGroups.push({ name, cases });
+        }
+
+        // --- フェーズ1: 動画ロードとフレーム送り ---
+        addTestGroup("フェーズ1: 動画ロードとフレーム送り", [
+            {
+                name: "動画要素とCanvas要素が存在すること",
+                fn: async (win) => {
+                    assert(win.appState, "appStateオブジェクトが存在すること");
+                    assert(win.appState.videoElement, "videoElementが定義されていること");
+                    assert(win.appState.canvas, "canvasが定義されていること");
+                    assert(win.appState.ctx, "Canvas 2D contextが定義されていること");
+                }
+            },
+            {
+                name: "デフォルト動画(sample.mp4)のロード完了を待つ",
+                fn: async (win) => {
+                    return new Promise((resolve, reject) => {
+                        let attempts = 0;
+                        const check = () => {
+                            attempts++;
+                            if (win.appState.videoElement.readyState >= 2 && win.appState.videoElement.duration > 0) {
+                                log(`動画ロード完了! 長さ: ${win.appState.videoElement.duration.toFixed(2)}s`);
+                                resolve();
+                            } else if (attempts > 50) {
+                                reject(new Error("動画のロードがタイムアウトしました。"));
+                            } else {
+                                setTimeout(check, 100);
+                            }
+                        };
+                        check();
+                    });
+                }
+            },
+            {
+                name: "初期フレームが0であること",
+                fn: async (win) => {
+                    assertEq(win.appState.currentFrame, 0, "初期フレームは0");
+                    const label = win.document.getElementById('lbl-frame').textContent;
+                    assertEq(parseInt(label), 0, "フレームラベルの初期値は0");
+                }
+            },
+            {
+                name: "1フレーム進む",
+                fn: async (win) => {
+                    win.stepFrame(1);
+                    await new Promise(r => setTimeout(r, 100));
+                    assertEq(win.appState.currentFrame, 1, "currentFrameが1に更新されること");
+                }
+            },
+            {
+                name: "10フレーム進む",
+                fn: async (win) => {
+                    win.stepFrame(10);
+                    await new Promise(r => setTimeout(r, 100));
+                    assertEq(win.appState.currentFrame, 11, "currentFrameが11になること");
+                }
+            },
+            {
+                name: "シーク境界値チェック",
+                fn: async (win) => {
+                    win.seekToFrame(-5);
+                    await new Promise(r => setTimeout(r, 100));
+                    assertEq(win.appState.currentFrame, 0, "0未満は0に丸められること");
+                    
+                    win.seekToFrame(win.appState.totalFrames + 10);
+                    await new Promise(r => setTimeout(r, 100));
+                    assertEq(win.appState.currentFrame, win.appState.totalFrames, "最大フレーム超過は最大値に丸められること");
+                }
+            }
+        ]);
+
+        // --- フェーズ2: ズーム・パンと座標変換 ---
+        addTestGroup("フェーズ2: ズーム・パンと座標変換", [
+            {
+                name: "ズームリセットが動作すること",
+                fn: async (win) => {
+                    win.appState.viewState = { scale: 2, offsetX: 100, offsetY: 50 };
+                    win.resetZoom();
+                    assertEq(win.appState.viewState.scale, 1, "scaleが1に戻ること");
+                    assertEq(win.appState.viewState.offsetX, 0, "offsetXが0に戻ること");
+                    assertEq(win.appState.viewState.offsetY, 0, "offsetYが0に戻ること");
+                }
+            },
+            {
+                name: "アフィン変換座標変換 (1倍・オフセット0)",
+                fn: async (win) => {
+                    win.resetZoom();
+                    win.test_setVars({
+                        canvas: { width: 800, height: 600 },
+                        videoElement: { videoWidth: 1600, videoHeight: 1200 }
+                    });
+                    
+                    const vPos = win.canvasToVideo(400, 300);
+                    assertClose(vPos.x, 800, 0.1, "Canvas(400, 300) -> Video(800, 600)");
+                    assertClose(vPos.y, 600, 0.1, "Canvas(400, 300) -> Video(800, 600)");
+                    
+                    const cPos = win.videoToCanvas(800, 600);
+                    assertClose(cPos.x, 400, 0.1, "Video(800, 600) -> Canvas(400, 300)");
+                    assertClose(cPos.y, 300, 0.1, "Video(800, 600) -> Canvas(400, 300)");
+                }
+            },
+            {
+                name: "アフィン変換座標変換 (2倍・パンあり)",
+                fn: async (win) => {
+                    win.test_setVars({
+                        canvas: { width: 800, height: 600 },
+                        videoElement: { videoWidth: 1600, videoHeight: 1200 },
+                        viewState: { scale: 2, offsetX: 100, offsetY: 50 }
+                    });
+                    
+                    const cPos = win.videoToCanvas(0, 0);
+                    assertClose(cPos.x, 100, 0.1, "Video(0,0) -> Canvas(100,50)");
+                    assertClose(cPos.y, 50, 0.1, "Video(0,0) -> Canvas(100,50)");
+                    
+                    const vPos = win.canvasToVideo(100, 50);
+                    assertClose(vPos.x, 0, 0.1, "Canvas(100,50) -> Video(0,0)");
+                    assertClose(vPos.y, 0, 0.1, "Canvas(100,50) -> Video(0,0)");
+                }
+            }
+        ]);
+
+        // --- フェーズ3 & 4: トラッキングデータと微調整 ---
+        addTestGroup("フェーズ3 & 4: トラックポイント登録と削除", [
+            {
+                name: "ポイントの追加と削除",
+                fn: async (win) => {
+                    win.test_setVars({ trackingData: [] });
+                    win.seekToFrame(10);
+                    
+                    win.setAppMode('track');
+                    const canvasEl = win.document.getElementById('tracker-canvas');
+                    const rect = canvasEl.getBoundingClientRect();
+                    
+                    const e = {
+                        clientX: rect.left + 100,
+                        clientY: rect.top + 100,
+                        preventDefault: () => {}
+                    };
+                    win.handleCanvasClick(e);
+                    
+                    assert(win.appState.trackingData.length > 0, "ポイントデータが1個以上登録されていること");
+                    const pt = win.appState.trackingData[0];
+                    assertEq(pt.frame, 10, "登録されたフレーム番号が10であること");
+                    
+                    win.deletePoint(pt.id);
+                    assertEq(win.appState.trackingData.length, 0, "削除後にデータ件数が0になること");
+                }
+            }
+        ]);
+
+        // --- フェーズ5: キャリブレーションと物理座標変換 ---
+        addTestGroup("フェーズ5: キャリブレーションと物理座標変換", [
+            {
+                name: "原点設定による座標オフセット",
+                fn: async (win) => {
+                    win.test_setVars({
+                        calibration: {
+                            origin: { x: 500, y: 500 },
+                            scaleRatio: null
+                        }
+                    });
+                    
+                    const pt = { x: 600, y: 400 };
+                    
+                    let physX = pt.x - win.appState.calibration.origin.x;
+                    let physY = win.appState.calibration.origin.y - pt.y;
+                    
+                    assertEq(physX, 100, "物理X座標が+100であること");
+                    assertEq(physY, 100, "物理Y座標が+100であること");
+                }
+            },
+            {
+                name: "スケール倍率による物理単位変換(cm)",
+                fn: async (win) => {
+                    win.test_setVars({
+                        calibration: {
+                            origin: { x: 500, y: 500 },
+                            scaleRatio: 2.5
+                        }
+                    });
+                    
+                    const pt = { x: 600, y: 400 };
+                    let physX = (pt.x - win.appState.calibration.origin.x) * win.appState.calibration.scaleRatio;
+                    let physY = (win.appState.calibration.origin.y - pt.y) * win.appState.calibration.scaleRatio;
+                    
+                    assertClose(physX, 250, 0.1, "物理Xが 250cm に変換されること");
+                    assertClose(physY, 250, 0.1, "物理Yが 250cm に変換されること");
+                }
+            }
+        ]);
+
+        async function runTests() {
+            clearLog();
+            resultsDiv.innerHTML = '';
+            summaryDiv.textContent = "テスト実行中...";
+            summaryDiv.style.background = "#202024";
+            
+            log("iframeを再読み込みします...");
+            iframe.src = iframe.src;
+            await new Promise(resolve => iframe.onload = resolve);
+            log("iframeロード完了");
+            
+            const win = iframe.contentWindow;
+            
+            let passedCount = 0;
+            let failedCount = 0;
+            let totalCount = 0;
+
+            for (const group of testGroups) {
+                log(`グループ開始: ${group.name}`);
+                
+                const groupDiv = document.createElement('div');
+                groupDiv.className = 'test-group';
+                
+                const header = document.createElement('div');
+                header.className = 'test-group-header';
+                header.innerHTML = `<span>${group.name}</span><span class="group-status">実行中...</span>`;
+                groupDiv.appendChild(header);
+                
+                const casesContainer = document.createElement('div');
+                groupDiv.appendChild(casesContainer);
+                resultsDiv.appendChild(groupDiv);
+
+                let groupFailed = false;
+
+                for (const tcase of group.cases) {
+                    totalCount++;
+                    log(`テストケース実行: ${tcase.name}`);
+                    
+                    const caseDiv = document.createElement('div');
+                    caseDiv.className = 'test-case';
+                    caseDiv.innerHTML = `<span class="test-name">${tcase.name}</span><span class="status-running">実行中...</span>`;
+                    casesContainer.appendChild(caseDiv);
+
+                    try {
+                        await tcase.fn(win);
+                        caseDiv.querySelector('span:last-child').className = 'status-pass';
+                        caseDiv.querySelector('span:last-child').textContent = 'PASS';
+                        passedCount++;
+                        log(`PASS: ${tcase.name}`);
+                    } catch (err) {
+                        caseDiv.querySelector('span:last-child').className = 'status-fail';
+                        caseDiv.querySelector('span:last-child').textContent = 'FAIL';
+                        const errMsg = document.createElement('div');
+                        errMsg.style.color = '#f75a68';
+                        errMsg.style.fontSize = '12px';
+                        errMsg.style.width = '100%';
+                        errMsg.style.padding = '4px 0 0 0';
+                        errMsg.textContent = err.message;
+                        caseDiv.appendChild(errMsg);
+                        failedCount++;
+                        groupFailed = true;
+                        log(`FAIL: ${tcase.name} - ${err.message}`);
+                    }
+                }
+
+                header.querySelector('.group-status').textContent = groupFailed ? '一部失敗' : '合格';
+                header.querySelector('.group-status').style.color = groupFailed ? '#f75a68' : '#04d361';
+            }
+
+            summaryDiv.textContent = `テスト終了: 全 ${totalCount} 件中 ${passedCount} 件合格, ${failedCount} 件不合格`;
+            if (failedCount === 0) {
+                summaryDiv.style.background = "rgba(4, 211, 97, 0.2)";
+                summaryDiv.style.border = "1px solid #04d361";
+                log("全テスト合格！");
+            } else {
+                summaryDiv.style.background = "rgba(247, 90, 104, 0.2)";
+                summaryDiv.style.border = "1px solid #f75a68";
+                log("テスト失敗あり");
+            }
+        }
+
+        runBtn.addEventListener('click', runTests);
+        
+        window.addEventListener('load', () => {
+            setTimeout(runTests, 1500);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,1415 @@
+// Physics Tracker - app.js
+// iPadおよび各種ブラウザ向け動画解析ウェブアプリコアロジック
+
+// --- 状態管理を一元化 ---
+const appState = {
+    videoElement: null,
+    canvas: null,
+    ctx: null,
+    isPlaying: false,
+    videoDuration: 0,
+    videoFps: 30,
+    currentFrame: 0,
+    totalFrames: 0,
+    viewState: { scale: 1, offsetX: 0, offsetY: 0 },
+    appMode: 'select', // 'select' | 'track' | 'origin' | 'scale'
+    trackingData: [], // [{ id, frame, time, x, y, objectId }]
+    activeObjectId: 1,
+    trackingStepSize: 1,
+    calibration: {
+        origin: null,         // { x, y } (動画ピクセル座標)
+        scaleRatio: null,     // cm/px
+        scaleStart: null,     // { x, y }
+        scaleEnd: null,       // { x, y }
+        scaleActual: 0,       // cm
+        scaleTempStart: null  // 一時始点
+    },
+    targetColor: null,        // { r, g, b } サンプリングされた色
+    isAutoTracking: false,    // 自動追跡実行フラグ
+    selectedPointId: null     // 現在選択されているトラックポイントのID
+};
+
+// グローバル（window）に公開してテストスイートからアクセス可能にする
+window.appState = appState;
+
+// カラーマップ (10色)
+const COLOR_MAP = [
+    '#ff4757', // 赤
+    '#2ed573', // 緑
+    '#1e90ff', // 青
+    '#ffa502', // オレンジ
+    '#eccc68', // 黄色
+    '#ff6b81', // ピンク
+    '#70a1ff', // 水色
+    '#7bed9f', // 黄緑
+    '#a29bfe', // 紫
+    '#000000'  // 黒
+];
+
+// オートトラッカー用内部Canvas
+let offscreenCanvas = null;
+let offscreenCtx = null;
+
+// ピンチズーム操作時の前フレーム状態保持用変数 (吸い付きズーム用)
+let activePointers = []; // Pointer Events 用の配列
+let lastPointerPos = null; // ドラッグパン用の一時座標
+let lastPinchDist = 0;
+let lastPinchCenter = null;
+let isPanning = false;
+let isDraggingPoint = false;
+let draggedPointIndex = -1;
+
+// デバッグ用ログ出力
+function logDebug(message) {
+    const logList = document.getElementById('debug-log-list');
+    if (!logList) return;
+    const item = document.createElement('div');
+    item.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+    logList.appendChild(item);
+    logList.scrollTop = logList.scrollHeight;
+    console.log(message);
+}
+
+// --- DOM初期化 ---
+document.addEventListener('DOMContentLoaded', () => {
+    logDebug("アプリケーション起動");
+    
+    appState.videoElement = document.getElementById('hidden-video');
+    appState.canvas = document.getElementById('tracker-canvas');
+    appState.ctx = appState.canvas.getContext('2d');
+    
+    // 各種初期化
+    setupFileUpload();
+    setupPlaybackControls();
+    setupDebugConsole();
+    setupCanvasTouch();
+    setupModeButtons();
+    setupSettingsInputs();
+    setupExport();
+    setupAutoTrackerUI();
+    setupGraphEvents();
+    setupDeletionEvent();
+    
+    // ウィンドウリサイズ時の処理
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('resize', updateGraph);
+
+    // デフォルト動画 (sample.mp4) の自動ロード試行
+    logDebug("デフォルト動画 (sample.mp4) のロードを開始します...");
+    appState.videoElement.src = "sample.mp4";
+    appState.videoElement.load();
+    const hintOverlay = document.getElementById('hint-overlay');
+    if (hintOverlay) {
+        hintOverlay.style.opacity = '0';
+    }
+});
+
+// --- デバッグコンソールのトグル ---
+function setupDebugConsole() {
+    const btnToggle = document.getElementById('btn-toggle-debug');
+    const consoleDiv = document.getElementById('debug-console');
+    const btnClear = document.getElementById('btn-clear-debug');
+    
+    if (btnToggle && consoleDiv) {
+        btnToggle.addEventListener('click', () => {
+            consoleDiv.style.display = consoleDiv.style.display === 'none' ? 'flex' : 'none';
+        });
+    }
+    
+    if (btnClear) {
+        btnClear.addEventListener('click', () => {
+            const logList = document.getElementById('debug-log-list');
+            if (logList) logList.innerHTML = '';
+        });
+    }
+}
+
+// --- 動画のアップロード・ロード ---
+function setupFileUpload() {
+    const uploadInput = document.getElementById('video-upload');
+    const hintOverlay = document.getElementById('hint-overlay');
+    
+    if (uploadInput) {
+        uploadInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            logDebug(`ファイル選択: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
+            
+            if (appState.videoElement.src && appState.videoElement.src.startsWith('blob:')) {
+                URL.revokeObjectURL(appState.videoElement.src);
+            }
+            
+            const fileUrl = URL.createObjectURL(file);
+            if (hintOverlay) hintOverlay.style.opacity = '0';
+            
+            appState.videoElement.src = fileUrl;
+            appState.videoElement.load();
+        });
+    }
+    
+    appState.videoElement.addEventListener('loadedmetadata', () => {
+        appState.videoDuration = appState.videoElement.duration;
+        appState.totalFrames = Math.floor(appState.videoDuration * appState.videoFps);
+        appState.currentFrame = 0;
+        
+        logDebug(`動画ロード完了: 長さ ${appState.videoDuration.toFixed(2)}s, 総フレーム数 ${appState.totalFrames} (FPS: ${appState.videoFps})`);
+        
+        const slider = document.getElementById('frame-slider');
+        if (slider) {
+            slider.disabled = false;
+            slider.max = appState.totalFrames;
+            slider.value = 0;
+        }
+        
+        const fpsLabel = document.getElementById('lbl-fps');
+        if (fpsLabel) fpsLabel.textContent = appState.videoFps;
+        
+        updateTimeDisplay();
+        handleResize();
+        updateGraph();
+    });
+    
+    appState.videoElement.addEventListener('canplay', () => {
+        updateOffscreenCanvas();
+        drawVideoFrame();
+    });
+    
+    appState.videoElement.addEventListener('seeked', () => {
+        updateOffscreenCanvas();
+        drawVideoFrame();
+        updateTimeDisplay();
+        const lblFrame = document.getElementById('lbl-frame');
+        if (lblFrame) lblFrame.textContent = appState.currentFrame;
+    });
+    
+    appState.videoElement.addEventListener('error', () => {
+        logDebug(`動画エラー発生: ${appState.videoElement.error ? appState.videoElement.error.message : 'Unknown'}`);
+    });
+}
+
+// --- オフスクリーン Canvas の更新 ---
+function updateOffscreenCanvas() {
+    if (!appState.videoElement || appState.videoElement.readyState < 2) return;
+    if (!offscreenCanvas) {
+        offscreenCanvas = document.createElement('canvas');
+        offscreenCtx = offscreenCanvas.getContext('2d');
+    }
+    if (offscreenCanvas.width !== appState.videoElement.videoWidth || offscreenCanvas.height !== appState.videoElement.videoHeight) {
+        offscreenCanvas.width = appState.videoElement.videoWidth;
+        offscreenCanvas.height = appState.videoElement.videoHeight;
+    }
+    offscreenCtx.drawImage(appState.videoElement, 0, 0);
+}
+
+// --- コマ送り・シークなどのコントロール ---
+function setupPlaybackControls() {
+    const btnPlay = document.getElementById('btn-play-pause');
+    const btnPrev1 = document.getElementById('btn-prev-1');
+    const btnNext1 = document.getElementById('btn-next-1');
+    const btnPrev10 = document.getElementById('btn-prev-10');
+    const btnNext10 = document.getElementById('btn-next-10');
+    const slider = document.getElementById('frame-slider');
+    
+    if (btnPlay) {
+        btnPlay.addEventListener('click', () => {
+            if (!appState.videoElement.src) return;
+            if (appState.isPlaying) {
+                pauseVideo();
+            } else {
+                playVideo();
+            }
+        });
+    }
+    
+    if (btnPrev1) btnPrev1.addEventListener('click', () => stepFrame(-1));
+    if (btnNext1) btnNext1.addEventListener('click', () => stepFrame(1));
+    if (btnPrev10) btnPrev10.addEventListener('click', () => stepFrame(-10));
+    if (btnNext10) btnNext10.addEventListener('click', () => stepFrame(10));
+    
+    if (slider) {
+        slider.addEventListener('input', (e) => {
+            const targetFrame = parseInt(e.target.value);
+            seekToFrame(targetFrame);
+        });
+    }
+}
+
+function stepFrame(delta) {
+    if (!appState.videoElement.src) return;
+    pauseVideo();
+    const targetFrame = Math.max(0, Math.min(appState.totalFrames, appState.currentFrame + delta));
+    seekToFrame(targetFrame);
+}
+
+function seekToFrame(frame) {
+    appState.currentFrame = Math.max(0, Math.min(appState.totalFrames, frame));
+    const targetTime = appState.currentFrame / appState.videoFps;
+    appState.videoElement.currentTime = Math.min(appState.videoDuration - 0.001, Math.max(0, targetTime));
+    
+    const slider = document.getElementById('frame-slider');
+    if (slider) slider.value = appState.currentFrame;
+}
+
+function playVideo() {
+    appState.isPlaying = true;
+    const btnPlay = document.getElementById('btn-play-pause');
+    if (btnPlay) btnPlay.querySelector('span').textContent = 'pause';
+    appState.videoElement.play();
+    logDebug("再生開始");
+    requestAnimationFrame(renderLoop);
+}
+
+function pauseVideo() {
+    appState.isPlaying = false;
+    const btnPlay = document.getElementById('btn-play-pause');
+    if (btnPlay) btnPlay.querySelector('span').textContent = 'play_arrow';
+    appState.videoElement.pause();
+    logDebug("一時停止");
+}
+
+function renderLoop() {
+    if (!appState.isPlaying) return;
+    
+    appState.currentFrame = Math.floor(appState.videoElement.currentTime * appState.videoFps);
+    const slider = document.getElementById('frame-slider');
+    if (slider) slider.value = appState.currentFrame;
+    
+    const lblFrame = document.getElementById('lbl-frame');
+    if (lblFrame) lblFrame.textContent = appState.currentFrame;
+    
+    updateOffscreenCanvas();
+    drawVideoFrame();
+    updateTimeDisplay();
+    
+    if (!appState.videoElement.paused && !appState.videoElement.ended) {
+        requestAnimationFrame(renderLoop);
+    } else if (appState.videoElement.ended) {
+        pauseVideo();
+    }
+}
+
+// タイム表示の更新
+function updateTimeDisplay() {
+    const timeDisplay = document.getElementById('time-display');
+    if (!timeDisplay) return;
+    
+    const curSec = appState.videoElement.currentTime;
+    const durSec = appState.videoDuration;
+    
+    const format = (sec) => {
+        const m = Math.floor(sec / 60).toString().padStart(2, '0');
+        const s = Math.floor(sec % 60).toString().padStart(2, '0');
+        const ms = Math.floor((sec % 1) * 100).toString().padStart(2, '0');
+        return `${m}:${s}.${ms}`;
+    };
+    
+    timeDisplay.textContent = `${format(curSec)} / ${format(durSec)}`;
+}
+
+// Canvasリサイズ処理
+function handleResize() {
+    const container = document.getElementById('canvas-container');
+    if (!container || !appState.videoElement.src || appState.videoElement.videoWidth === 0) return;
+    
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+    
+    const vWidth = appState.videoElement.videoWidth;
+    const vHeight = appState.videoElement.videoHeight;
+    
+    const scale = Math.min(containerWidth / vWidth, containerHeight / vHeight);
+    
+    appState.canvas.width = vWidth * scale;
+    appState.canvas.height = vHeight * scale;
+    
+    logDebug(`Canvasリサイズ: ${appState.canvas.width.toFixed(0)}x${appState.canvas.height.toFixed(0)} (Video: ${vWidth}x${vHeight})`);
+    
+    drawVideoFrame();
+}
+
+// --- Canvasへの描画処理 ---
+function drawVideoFrame() {
+    if (!appState.videoElement.src || appState.videoElement.readyState < 2) return;
+    
+    appState.ctx.clearRect(0, 0, appState.canvas.width, appState.canvas.height);
+    
+    appState.ctx.save();
+    // アフィン変換の適用
+    appState.ctx.translate(appState.viewState.offsetX, appState.viewState.offsetY);
+    appState.ctx.scale(appState.viewState.scale, appState.viewState.scale);
+    
+    // 動画フレームの描画
+    appState.ctx.drawImage(appState.videoElement, 0, 0, appState.canvas.width, appState.canvas.height);
+    
+    // キャリブレーションマーカーとトラックポイントの描画
+    drawCalibrationMarkers();
+    drawTrackingPoints();
+    
+    appState.ctx.restore();
+}
+
+// --- 座標変換関数 ---
+function canvasToVideo(cx, cy) {
+    const lx = (cx - appState.viewState.offsetX) / appState.viewState.scale;
+    const ly = (cy - appState.viewState.offsetY) / appState.viewState.scale;
+    
+    const vWidth = appState.videoElement ? appState.videoElement.videoWidth : 1;
+    const vHeight = appState.videoElement ? appState.videoElement.videoHeight : 1;
+    const cWidth = appState.canvas ? appState.canvas.width : 1;
+    const cHeight = appState.canvas ? appState.canvas.height : 1;
+    
+    const vx = lx * (vWidth / cWidth);
+    const vy = ly * (vHeight / cHeight);
+    return { x: vx, y: vy };
+}
+
+function videoToCanvas(vx, vy) {
+    const local = videoToLocalCanvas(vx, vy);
+    
+    const cx = local.x * appState.viewState.scale + appState.viewState.offsetX;
+    const cy = local.y * appState.viewState.scale + appState.viewState.offsetY;
+    return { x: cx, y: cy };
+}
+
+// 動画座標からCanvasローカル座標([0, canvas.width] x [0, canvas.height])へのスケール変換
+function videoToLocalCanvas(vx, vy) {
+    const vWidth = appState.videoElement ? appState.videoElement.videoWidth : 1;
+    const vHeight = appState.videoElement ? appState.videoElement.videoHeight : 1;
+    const cWidth = appState.canvas ? appState.canvas.width : 1;
+    const cHeight = appState.canvas ? appState.canvas.height : 1;
+    
+    const lx = vx * (cWidth / vWidth);
+    const ly = vy * (cHeight / vHeight);
+    return { x: lx, y: ly };
+}
+
+// --- Pointer Events によるズーム・パン、ドラッグ ---
+function setupCanvasTouch() {
+    appState.canvas.addEventListener('pointerdown', handlePointerDown);
+    appState.canvas.addEventListener('pointermove', handlePointerMove);
+    appState.canvas.addEventListener('pointerup', handlePointerUp);
+    appState.canvas.addEventListener('pointercancel', handlePointerUp);
+    appState.canvas.addEventListener('wheel', handleWheel, { passive: false });
+}
+
+function handlePointerDown(e) {
+    e.preventDefault();
+    appState.canvas.setPointerCapture(e.pointerId);
+    
+    activePointers.push({
+        id: e.pointerId,
+        x: e.clientX,
+        y: e.clientY
+    });
+    
+    const rect = appState.canvas.getBoundingClientRect();
+    const localX = e.clientX - rect.left;
+    const localY = e.clientY - rect.top;
+    
+    if (activePointers.length === 1) {
+        lastPointerPos = { x: localX, y: localY };
+        handleCanvasClick(e);
+    } else if (activePointers.length === 2) {
+        const p1 = activePointers[0];
+        const p2 = activePointers[1];
+        
+        const p1Local = { x: p1.x - rect.left, y: p1.y - rect.top };
+        const p2Local = { x: p2.x - rect.left, y: p2.y - rect.top };
+        
+        lastPinchDist = Math.hypot(p1Local.x - p2Local.x, p1Local.y - p2Local.y);
+        lastPinchCenter = {
+            x: (p1Local.x + p2Local.x) / 2,
+            y: (p1Local.y + p2Local.y) / 2
+        };
+        isPanning = true;
+        logDebug("ピンチ開始（吸い付きズーム有効）");
+    }
+}
+
+function handlePointerMove(e) {
+    e.preventDefault();
+    const pointer = activePointers.find(p => p.id === e.pointerId);
+    if (!pointer) return;
+    
+    pointer.x = e.clientX;
+    pointer.y = e.clientY;
+    
+    const rect = appState.canvas.getBoundingClientRect();
+    const localX = e.clientX - rect.left;
+    const localY = e.clientY - rect.top;
+    
+    if (activePointers.length === 1) {
+        if (isDraggingPoint && draggedPointIndex !== -1) {
+            const vPos = canvasToVideo(localX, localY);
+            appState.trackingData[draggedPointIndex].x = vPos.x;
+            appState.trackingData[draggedPointIndex].y = vPos.y;
+            
+            drawVideoFrame();
+            updateDataTable();
+            updateGraph();
+        } else if (appState.appMode === 'select' && lastPointerPos && !isPanning) {
+            const dx = localX - lastPointerPos.x;
+            const dy = localY - lastPointerPos.y;
+            appState.viewState.offsetX += dx;
+            appState.viewState.offsetY += dy;
+            lastPointerPos = { x: localX, y: localY };
+            drawVideoFrame();
+        }
+    } else if (activePointers.length === 2 && isPanning) {
+        const p1 = activePointers[0];
+        const p2 = activePointers[1];
+        
+        const p1Local = { x: p1.x - rect.left, y: p1.y - rect.top };
+        const p2Local = { x: p2.x - rect.left, y: p2.y - rect.top };
+        
+        const currentDist = Math.hypot(p1Local.x - p2Local.x, p1Local.y - p2Local.y);
+        const currentCenter = {
+            x: (p1Local.x + p2Local.x) / 2,
+            y: (p1Local.y + p2Local.y) / 2
+        };
+        
+        if (lastPinchDist > 0 && lastPinchCenter) {
+            const dScale = currentDist / lastPinchDist;
+            let newScale = appState.viewState.scale * dScale;
+            newScale = Math.max(0.5, Math.min(10, newScale));
+            
+            const actualRatio = newScale / appState.viewState.scale;
+            const dx = currentCenter.x - lastPinchCenter.x;
+            const dy = currentCenter.y - lastPinchCenter.y;
+            
+            appState.viewState.offsetX = currentCenter.x - (currentCenter.x - appState.viewState.offsetX) * actualRatio + dx;
+            appState.viewState.offsetY = currentCenter.y - (currentCenter.y - appState.viewState.offsetY) * actualRatio + dy;
+            appState.viewState.scale = newScale;
+            
+            drawVideoFrame();
+        }
+        
+        lastPinchDist = currentDist;
+        lastPinchCenter = currentCenter;
+    }
+}
+
+function handlePointerUp(e) {
+    appState.canvas.releasePointerCapture(e.pointerId);
+    activePointers = activePointers.filter(p => p.id !== e.pointerId);
+    
+    if (activePointers.length < 2) {
+        isPanning = false;
+        lastPinchDist = 0;
+        lastPinchCenter = null;
+    }
+    
+    const rect = appState.canvas.getBoundingClientRect();
+    if (activePointers.length === 1) {
+        const p = activePointers[0];
+        lastPointerPos = { x: p.x - rect.left, y: p.y - rect.top };
+    } else if (activePointers.length === 0) {
+        lastPointerPos = null;
+        if (isDraggingPoint) {
+            isDraggingPoint = false;
+            draggedPointIndex = -1;
+            logDebug("ドラッグ完了");
+        }
+    }
+}
+
+function handleWheel(e) {
+    e.preventDefault();
+    const zoomIntensity = 0.08;
+    const rect = appState.canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    const wheel = e.deltaY < 0 ? 1 : -1;
+    const zoomFactor = Math.exp(wheel * zoomIntensity);
+    
+    const oldScale = appState.viewState.scale;
+    let newScale = oldScale * zoomFactor;
+    newScale = Math.max(0.5, Math.min(10, newScale));
+    
+    const actualRatio = newScale / oldScale;
+    
+    appState.viewState.offsetX = mouseX - (mouseX - appState.viewState.offsetX) * actualRatio;
+    appState.viewState.offsetY = mouseY - (mouseY - appState.viewState.offsetY) * actualRatio;
+    appState.viewState.scale = newScale;
+    
+    drawVideoFrame();
+}
+
+function resetZoom() {
+    appState.viewState = { scale: 1, offsetX: 0, offsetY: 0 };
+    drawVideoFrame();
+    logDebug("ズームリセット");
+}
+
+// --- モード切替 ---
+function setAppMode(mode) {
+    appState.appMode = mode;
+    document.getElementById('mode-select').classList.toggle('active', mode === 'select');
+    document.getElementById('mode-track').classList.toggle('active', mode === 'track');
+    document.getElementById('btn-set-origin').classList.toggle('active', mode === 'origin');
+    document.getElementById('btn-set-scale').classList.toggle('active', mode === 'scale');
+    logDebug(`モード切り替え: ${mode}`);
+    
+    // モード切り替え時に選択を解除
+    setSelectedPoint(null);
+}
+
+function setupModeButtons() {
+    document.getElementById('mode-select').addEventListener('click', () => setAppMode('select'));
+    document.getElementById('mode-track').addEventListener('click', () => setAppMode('track'));
+    document.getElementById('btn-set-origin').addEventListener('click', () => setAppMode('origin'));
+    document.getElementById('btn-set-scale').addEventListener('click', () => setAppMode('scale'));
+    document.getElementById('btn-zoom-reset').addEventListener('click', resetZoom);
+}
+
+// 設定入力欄のイベント設定
+function setupSettingsInputs() {
+    const objIdInput = document.getElementById('object-id-select');
+    const stepInput = document.getElementById('step-size-select');
+    
+    if (objIdInput) {
+        objIdInput.addEventListener('change', (e) => {
+            appState.activeObjectId = Math.max(1, parseInt(e.target.value) || 1);
+            updateDataTable();
+            drawVideoFrame();
+            updateGraph();
+            logDebug(`アクティブ物体ID: ${appState.activeObjectId}`);
+        });
+    }
+    
+    if (stepInput) {
+        stepInput.addEventListener('change', (e) => {
+            appState.trackingStepSize = Math.max(1, parseInt(e.target.value) || 1);
+            logDebug(`ステップ幅: ${appState.trackingStepSize}`);
+        });
+    }
+}
+
+// --- キャンバス上のクリック/タップイベント ---
+function handleCanvasClick(e) {
+    const rect = appState.canvas.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    
+    const vPos = canvasToVideo(cx, cy);
+    
+    if (appState.appMode === 'track') {
+        const existingIndex = appState.trackingData.findIndex(p => p.frame === appState.currentFrame && p.objectId === appState.activeObjectId);
+        const newPoint = {
+            id: Date.now(),
+            frame: appState.currentFrame,
+            time: appState.currentFrame / appState.videoFps,
+            x: vPos.x,
+            y: vPos.y,
+            objectId: appState.activeObjectId
+        };
+        
+        if (existingIndex >= 0) {
+            appState.trackingData[existingIndex] = newPoint;
+        } else {
+            appState.trackingData.push(newPoint);
+        }
+        
+        appState.targetColor = sampleColor(vPos.x, vPos.y);
+        if (appState.targetColor) {
+            logDebug(`色をサンプリングしました: RGB(${appState.targetColor.r}, ${appState.targetColor.g}, ${appState.targetColor.b})`);
+        }
+        
+        logDebug(`ポイント登録: Frame ${appState.currentFrame}, X: ${vPos.x.toFixed(1)}, Y: ${vPos.y.toFixed(1)}`);
+        updateDataTable();
+        drawVideoFrame();
+        updateGraph();
+        
+        stepFrame(appState.trackingStepSize);
+        
+    } else if (appState.appMode === 'select') {
+        let foundIndex = -1;
+        let minDist = 15; // 判定半径 (px)
+        
+        appState.trackingData.forEach((p, idx) => {
+            if (p.frame === appState.currentFrame) {
+                const pCanvas = videoToCanvas(p.x, p.y);
+                const dist = Math.hypot(pCanvas.x - cx, pCanvas.y - cy);
+                if (dist < minDist) {
+                    minDist = dist;
+                    foundIndex = idx;
+                }
+            }
+        });
+        
+        if (foundIndex >= 0) {
+            isDraggingPoint = true;
+            draggedPointIndex = foundIndex;
+            setSelectedPoint(appState.trackingData[foundIndex].id);
+            logDebug(`ポイント選択: Index ${foundIndex}`);
+        } else {
+            // ポイント外をタップした場合は選択を解除
+            setSelectedPoint(null);
+        }
+        drawVideoFrame();
+        
+    } else if (appState.appMode === 'origin') {
+        calibration.origin = { x: vPos.x, y: vPos.y };
+        logDebug(`原点を設定しました: X: ${vPos.x.toFixed(1)}, Y: ${vPos.y.toFixed(1)}`);
+        document.getElementById('info-origin').textContent = `(${vPos.x.toFixed(0)}, ${vPos.y.toFixed(0)})`;
+        updateDataTable();
+        drawVideoFrame();
+        updateGraph();
+        setAppMode('select');
+        
+    } else if (appState.appMode === 'scale') {
+        if (!calibration.scaleTempStart) {
+            calibration.scaleTempStart = { x: vPos.x, y: vPos.y };
+            logDebug("スケール始点を設定。終点をタップしてください。");
+        } else {
+            const start = calibration.scaleTempStart;
+            const end = { x: vPos.x, y: vPos.y };
+            const pixelDistance = Math.hypot(end.x - start.x, end.y - start.y);
+            
+            showInputDialog("スケール設定", `タップした2点間の距離は ${pixelDistance.toFixed(1)} px です。実際の物理的距離を入力してください (cm):`, "100", (val) => {
+                const actualDist = parseFloat(val);
+                if (!isNaN(actualDist) && actualDist > 0) {
+                    calibration.scaleRatio = actualDist / pixelDistance;
+                    calibration.scaleStart = start;
+                    calibration.scaleEnd = end;
+                    calibration.scaleActual = actualDist;
+                    logDebug(`スケール設定完了: ${calibration.scaleRatio.toFixed(4)} cm/px (実寸: ${actualDist} cm)`);
+                    document.getElementById('info-scale').textContent = `${calibration.scaleRatio.toFixed(3)} cm/px`;
+                    updateDataTable();
+                    drawVideoFrame();
+                    updateGraph();
+                } else {
+                    logDebug("無効な距離が入力されました。");
+                }
+                calibration.scaleTempStart = null;
+                setAppMode('select');
+            });
+        }
+    }
+}
+
+// 選択ポイント状態の切り替え
+function setSelectedPoint(id) {
+    appState.selectedPointId = id;
+    const btnDel = document.getElementById('btn-delete-selected');
+    if (btnDel) {
+        if (id !== null) {
+            btnDel.disabled = false;
+            btnDel.style.opacity = '1';
+        } else {
+            btnDel.disabled = true;
+            btnDel.style.opacity = '0.5';
+        }
+    }
+}
+
+// 選択ポイント削除ボタンイベント設定
+function setupDeletionEvent() {
+    const btnDel = document.getElementById('btn-delete-selected');
+    if (btnDel) {
+        btnDel.addEventListener('click', () => {
+            if (appState.selectedPointId !== null) {
+                appState.trackingData = appState.trackingData.filter(p => p.id !== appState.selectedPointId);
+                logDebug(`選択ポイント削除: ID ${appState.selectedPointId}`);
+                setSelectedPoint(null);
+                updateDataTable();
+                drawVideoFrame();
+                updateGraph();
+            }
+        });
+    }
+}
+
+// --- 色サンプリングと色自動追跡 ---
+function sampleColor(vx, vy) {
+    if (!offscreenCtx) return null;
+    
+    const x = Math.round(vx);
+    const y = Math.round(vy);
+    const w = offscreenCanvas.width;
+    const h = offscreenCanvas.height;
+    
+    if (x < 0 || x >= w || y < 0 || y >= h) return null;
+    
+    const radius = 2;
+    let rSum = 0, gSum = 0, bSum = 0, count = 0;
+    
+    const startX = Math.max(0, x - radius);
+    const endX = Math.min(w - 1, x + radius);
+    const startY = Math.max(0, y - radius);
+    const endY = Math.min(h - 1, y + radius);
+    
+    const imgData = offscreenCtx.getImageData(startX, startY, (endX - startX) + 1, (endY - startY) + 1);
+    const data = imgData.data;
+    
+    for (let i = 0; i < data.length; i += 4) {
+        rSum += data[i];
+        gSum += data[i+1];
+        bSum += data[i+2];
+        count++;
+    }
+    
+    return {
+        r: Math.round(rSum / count),
+        g: Math.round(gSum / count),
+        b: Math.round(bSum / count)
+    };
+}
+
+function trackColorStep() {
+    if (!appState.targetColor) {
+        logDebug("追跡対象の色が設定されていません。トラックモードで一度ポイントをタップして色を登録してください。");
+        return Promise.resolve(false);
+    }
+    
+    const currentPoint = appState.trackingData.find(p => p.frame === appState.currentFrame && p.objectId === appState.activeObjectId);
+    if (!currentPoint) {
+        logDebug("現在のフレームに基準ポイントがありません。");
+        return Promise.resolve(false);
+    }
+    
+    const prevX = currentPoint.x;
+    const prevY = currentPoint.y;
+    const nextFrame = appState.currentFrame + appState.trackingStepSize;
+    
+    if (nextFrame > appState.totalFrames) {
+        logDebug("動画の末尾に達しました。");
+        return Promise.resolve(false);
+    }
+    
+    return new Promise((resolve) => {
+        const onSeeked = () => {
+            appState.videoElement.removeEventListener('seeked', onSeeked);
+            
+            updateOffscreenCanvas();
+            
+            const winSize = parseInt(document.getElementById('track-window-size').value) || 60;
+            const threshold = parseInt(document.getElementById('track-threshold').value) || 40;
+            
+            const w = offscreenCanvas.width;
+            const h = offscreenCanvas.height;
+            
+            const startX = Math.max(0, Math.round(prevX - winSize / 2));
+            const endX = Math.min(w - 1, Math.round(prevX + winSize / 2));
+            const startY = Math.max(0, Math.round(prevY - winSize / 2));
+            const endY = Math.min(h - 1, Math.round(prevY + winSize / 2));
+            
+            const rectW = endX - startX + 1;
+            const rectH = endY - startY + 1;
+            
+            if (rectW <= 0 || rectH <= 0) {
+                logDebug("探索窓が動画範囲外です。");
+                resolve(false);
+                return;
+            }
+            
+            const imgData = offscreenCtx.getImageData(startX, startY, rectW, rectH);
+            const data = imgData.data;
+            
+            let sumX = 0;
+            let sumY = 0;
+            let matchCount = 0;
+            
+            for (let y = startY; y <= endY; y++) {
+                for (let x = startX; x <= endX; x++) {
+                    const localX = x - startX;
+                    const localY = y - startY;
+                    const idx = (localY * rectW + localX) * 4;
+                    
+                    const r = data[idx];
+                    const g = data[idx+1];
+                    const b = data[idx+2];
+                    
+                    const dist = Math.hypot(r - appState.targetColor.r, g - appState.targetColor.g, b - appState.targetColor.b);
+                    
+                    if (dist <= threshold) {
+                        sumX += x;
+                        sumY += y;
+                        matchCount++;
+                    }
+                }
+            }
+            
+            if (matchCount > 0) {
+                const nextX = sumX / matchCount;
+                const nextY = sumY / matchCount;
+                
+                const existingIndex = appState.trackingData.findIndex(p => p.frame === appState.currentFrame && p.objectId === appState.activeObjectId);
+                const newPoint = {
+                    id: Date.now(),
+                    frame: appState.currentFrame,
+                    time: appState.currentFrame / appState.videoFps,
+                    x: nextX,
+                    y: nextY,
+                    objectId: appState.activeObjectId
+                };
+                
+                if (existingIndex >= 0) {
+                    appState.trackingData[existingIndex] = newPoint;
+                } else {
+                    appState.trackingData.push(newPoint);
+                }
+                
+                updateDataTable();
+                drawVideoFrame();
+                updateGraph();
+                logDebug(`追跡成功: Frame ${appState.currentFrame}, X: ${nextX.toFixed(1)}, Y: ${nextY.toFixed(1)}`);
+                resolve(true);
+            } else {
+                logDebug(`追跡失敗: 一致する色が探索窓内で見つかりませんでした (閾値: ${threshold})`);
+                resolve(false);
+            }
+        };
+        
+        appState.videoElement.addEventListener('seeked', onSeeked);
+        seekToFrame(nextFrame);
+    });
+}
+
+async function runAutoTracking() {
+    if (appState.isAutoTracking) return;
+    
+    appState.isAutoTracking = true;
+    document.getElementById('btn-auto-track-run').style.display = 'none';
+    document.getElementById('btn-auto-track-stop').style.display = 'inline-flex';
+    logDebug("自動色追跡を開始しました。");
+    
+    while (appState.isAutoTracking) {
+        const success = await trackColorStep();
+        if (!success) {
+            stopAutoTracking();
+            break;
+        }
+        await new Promise(r => setTimeout(r, 100));
+    }
+}
+
+function stopAutoTracking() {
+    appState.isAutoTracking = false;
+    document.getElementById('btn-auto-track-run').style.display = 'inline-flex';
+    document.getElementById('btn-auto-track-stop').style.display = 'none';
+    logDebug("自動色追跡を停止しました。");
+}
+
+function setupAutoTrackerUI() {
+    const btnStep = document.getElementById('btn-auto-track-step');
+    const btnRun = document.getElementById('btn-auto-track-run');
+    const btnStop = document.getElementById('btn-auto-track-stop');
+    const thresholdInput = document.getElementById('track-threshold');
+    const lblThreshold = document.getElementById('lbl-threshold');
+    
+    if (btnStep) btnStep.addEventListener('click', trackColorStep);
+    if (btnRun) btnRun.addEventListener('click', runAutoTracking);
+    if (btnStop) btnStop.addEventListener('click', stopAutoTracking);
+    
+    if (thresholdInput && lblThreshold) {
+        thresholdInput.addEventListener('input', (e) => {
+            lblThreshold.textContent = e.target.value;
+        });
+    }
+}
+
+// --- マーカー描画 ---
+function drawTrackingPoints() {
+    const scale = appState.viewState.scale;
+    const baseRadius = 6;
+    const r = baseRadius / scale;
+    
+    appState.trackingData.forEach(p => {
+        const local = videoToLocalCanvas(p.x, p.y);
+        
+        if (p.frame === appState.currentFrame) {
+            // 選択されている場合はハイライト表示を追加
+            if (p.id === appState.selectedPointId) {
+                appState.ctx.beginPath();
+                appState.ctx.arc(local.x, local.y, r * 1.6, 0, Math.PI * 2);
+                appState.ctx.strokeStyle = '#d93025'; // 赤い強調外枠
+                appState.ctx.lineWidth = 2.0 / scale;
+                appState.ctx.stroke();
+            }
+            
+            // 現在フレームのマーカー
+            appState.ctx.beginPath();
+            appState.ctx.arc(local.x, local.y, r, 0, Math.PI * 2);
+            appState.ctx.fillStyle = COLOR_MAP[(p.objectId - 1) % COLOR_MAP.length];
+            appState.ctx.fill();
+            appState.ctx.strokeStyle = '#000000';
+            appState.ctx.lineWidth = 1.5 / scale;
+            appState.ctx.stroke();
+            
+            // 十字マーク
+            appState.ctx.beginPath();
+            appState.ctx.moveTo(local.x - r * 1.5, local.y);
+            appState.ctx.lineTo(local.x + r * 1.5, local.y);
+            appState.ctx.moveTo(local.x, local.y - r * 1.5);
+            appState.ctx.lineTo(local.x, local.y + r * 1.5);
+            appState.ctx.strokeStyle = '#ffffff';
+            appState.ctx.lineWidth = 1.0 / scale;
+            appState.ctx.stroke();
+        } else {
+            // 他のフレームの軌跡表示
+            appState.ctx.beginPath();
+            appState.ctx.arc(local.x, local.y, r * 0.4, 0, Math.PI * 2);
+            appState.ctx.fillStyle = COLOR_MAP[(p.objectId - 1) % COLOR_MAP.length] + '55';
+            appState.ctx.fill();
+        }
+    });
+}
+
+function drawCalibrationMarkers() {
+    const scale = appState.viewState.scale;
+    
+    // 原点描画
+    if (appState.calibration.origin) {
+        const localO = videoToLocalCanvas(appState.calibration.origin.x, appState.calibration.origin.y);
+        appState.ctx.beginPath();
+        appState.ctx.moveTo(localO.x - 40 / scale, localO.y);
+        appState.ctx.lineTo(localO.x + 40 / scale, localO.y);
+        appState.ctx.moveTo(localO.x, localO.y - 40 / scale);
+        appState.ctx.lineTo(localO.x, localO.y + 40 / scale);
+        appState.ctx.strokeStyle = '#d93025';
+        appState.ctx.lineWidth = 1.5 / scale;
+        appState.ctx.stroke();
+        
+        appState.ctx.fillStyle = '#d93025';
+        appState.ctx.font = `bold ${11 / scale}px var(--font-family)`;
+        appState.ctx.fillText("x", localO.x + 45 / scale, localO.y + 4 / scale);
+        appState.ctx.fillText("y", localO.x - 4 / scale, localO.y - 45 / scale);
+    }
+    
+    // スケール描画
+    if (appState.calibration.scaleStart && appState.calibration.scaleEnd) {
+        const localS = videoToLocalCanvas(appState.calibration.scaleStart.x, appState.calibration.scaleStart.y);
+        const localE = videoToLocalCanvas(appState.calibration.scaleEnd.x, appState.calibration.scaleEnd.y);
+        
+        appState.ctx.beginPath();
+        appState.ctx.moveTo(localS.x, localS.y);
+        appState.ctx.lineTo(localE.x, localE.y);
+        appState.ctx.strokeStyle = '#1a73e8';
+        appState.ctx.lineWidth = 2.0 / scale;
+        appState.ctx.stroke();
+        
+        const angle = Math.atan2(localE.y - localS.y, localE.x - localS.x);
+        const perp = angle + Math.PI / 2;
+        const barLen = 8 / scale;
+        
+        const drawEndBar = (pt) => {
+            appState.ctx.beginPath();
+            appState.ctx.moveTo(pt.x - Math.cos(perp) * barLen, pt.y - Math.sin(perp) * barLen);
+            appState.ctx.lineTo(pt.x + Math.cos(perp) * barLen, pt.y + Math.sin(perp) * barLen);
+            appState.ctx.stroke();
+        };
+        drawEndBar(localS);
+        drawEndBar(localE);
+        
+        appState.ctx.fillStyle = '#1a73e8';
+        appState.ctx.font = `${11 / scale}px var(--font-family)`;
+        const midX = (localS.x + localE.x) / 2;
+        const midY = (localS.y + localE.y) / 2;
+        appState.ctx.fillText(`${appState.calibration.scaleActual} cm`, midX + 10 / scale, midY - 10 / scale);
+    } else if (appState.calibration.scaleTempStart) {
+        const localTemp = videoToLocalCanvas(appState.calibration.scaleTempStart.x, appState.calibration.scaleTempStart.y);
+        appState.ctx.beginPath();
+        appState.ctx.arc(localTemp.x, localTemp.y, 5 / scale, 0, Math.PI * 2);
+        appState.ctx.fillStyle = '#1a73e8';
+        appState.ctx.fill();
+    }
+}
+
+// --- 測定データテーブルの更新 ---
+function updateDataTable() {
+    const tableBody = document.querySelector('#data-table tbody');
+    if (!tableBody) return;
+    
+    tableBody.innerHTML = '';
+    
+    const filteredData = appState.trackingData
+        .filter(p => p.objectId === appState.activeObjectId)
+        .sort((a, b) => a.frame - b.frame);
+        
+    if (filteredData.length === 0) {
+        tableBody.innerHTML = `<tr class="empty-row"><td colspan="4">データがありません</td></tr>`;
+        return;
+    }
+    
+    filteredData.forEach(p => {
+        const tr = document.createElement('tr');
+        
+        let physX = p.x;
+        let physY = p.y;
+        
+        if (appState.calibration.origin) {
+            physX = p.x - appState.calibration.origin.x;
+            physY = appState.calibration.origin.y - p.y; // Y軸反転
+        }
+        
+        if (appState.calibration.scaleRatio) {
+            physX *= appState.calibration.scaleRatio;
+            physY *= appState.calibration.scaleRatio;
+        }
+        
+        tr.innerHTML = `
+            <td>${p.time.toFixed(3)}</td>
+            <td>${physX.toFixed(1)}</td>
+            <td>${physY.toFixed(1)}</td>
+            <td>
+                <button class="btn-danger-small" onclick="deletePoint(${p.id})">削除</button>
+            </td>
+        `;
+        
+        // 選択された行のスタイルを変更
+        if (p.id === appState.selectedPointId) {
+            tr.style.background = '#e8f0fe';
+            tr.style.fontWeight = 'bold';
+        }
+        
+        tr.addEventListener('click', (e) => {
+            if (e.target.tagName !== 'BUTTON') {
+                setSelectedPoint(p.id);
+                seekToFrame(p.frame);
+                drawVideoFrame();
+                updateDataTable(); // 行選択の再描画
+            }
+        });
+        
+        tableBody.appendChild(tr);
+    });
+}
+
+function deletePoint(id) {
+    appState.trackingData = appState.trackingData.filter(p => p.id !== id);
+    if (appState.selectedPointId === id) {
+        setSelectedPoint(null);
+    }
+    updateDataTable();
+    drawVideoFrame();
+    updateGraph();
+    logDebug(`ポイント削除: ID ${id}`);
+}
+
+window.deletePoint = deletePoint;
+
+// --- リアルタイムグラフの描画 ---
+function setupGraphEvents() {
+    const selector = document.getElementById('graph-type-select');
+    if (selector) {
+        selector.addEventListener('change', updateGraph);
+    }
+}
+
+function updateGraph() {
+    const graphCanvas = document.getElementById('graph-canvas');
+    if (!graphCanvas) return;
+    
+    // 親要素のサイズに Canvas の物理解像度をフィットさせる
+    const container = graphCanvas.parentElement;
+    if (container.clientWidth > 0 && container.clientHeight > 0) {
+        graphCanvas.width = container.clientWidth;
+        graphCanvas.height = container.clientHeight;
+    }
+    
+    const gCtx = graphCanvas.getContext('2d');
+    gCtx.clearRect(0, 0, graphCanvas.width, graphCanvas.height);
+    
+    const data = appState.trackingData
+        .filter(p => p.objectId === appState.activeObjectId)
+        .sort((a, b) => a.frame - b.frame);
+        
+    if (data.length === 0) {
+        gCtx.fillStyle = 'var(--text-muted)';
+        gCtx.font = '11px var(--font-family)';
+        gCtx.textAlign = 'center';
+        gCtx.textBaseline = 'middle';
+        gCtx.fillText("測定が開始されると自動で描画されます", graphCanvas.width / 2, graphCanvas.height / 2);
+        return;
+    }
+    
+    const graphType = document.getElementById('graph-type-select').value; // 'y-t' | 'x-t' | 'y-x'
+    
+    // 物理座標変換ヘルパー
+    const getPhysCoord = (p) => {
+        let physX = p.x;
+        let physY = p.y;
+        if (appState.calibration.origin) {
+            physX = p.x - appState.calibration.origin.x;
+            physY = appState.calibration.origin.y - p.y;
+        }
+        if (appState.calibration.scaleRatio) {
+            physX *= appState.calibration.scaleRatio;
+            physY *= appState.calibration.scaleRatio;
+        }
+        return { x: physX, y: physY, t: p.time };
+    };
+    
+    const points = data.map(getPhysCoord);
+    
+    let valX = [], valY = [];
+    let labelX = "", labelY = "";
+    const unit = appState.calibration.scaleRatio ? "cm" : "px";
+    
+    if (graphType === 'y-t') {
+        valX = points.map(p => p.t);
+        valY = points.map(p => p.y);
+        labelX = "t (s)";
+        labelY = `y (${unit})`;
+    } else if (graphType === 'x-t') {
+        valX = points.map(p => p.t);
+        valY = points.map(p => p.x);
+        labelX = "t (s)";
+        labelY = `x (${unit})`;
+    } else if (graphType === 'y-x') {
+        valX = points.map(p => p.x);
+        valY = points.map(p => p.y);
+        labelX = `x (${unit})`;
+        labelY = `y (${unit})`;
+    }
+    
+    let minX = Math.min(...valX);
+    let maxX = Math.max(...valX);
+    let minY = Math.min(...valY);
+    let maxY = Math.max(...valY);
+    
+    // 最大最小が一致する場合のフラット防止
+    if (maxX === minX) { maxX += 1; minX -= 1; }
+    if (maxY === minY) { maxY += 1; minY -= 1; }
+    
+    // マージン
+    const padL = 35;
+    const padR = 15;
+    const padT = 15;
+    const padB = 22;
+    
+    const plotW = graphCanvas.width - padL - padR;
+    const plotH = graphCanvas.height - padT - padB;
+    
+    const toCanvasX = (val) => padL + ((val - minX) / (maxX - minX)) * plotW;
+    const toCanvasY = (val) => padT + plotH - ((val - minY) / (maxY - minY)) * plotH;
+    
+    // グリッド背景線
+    gCtx.strokeStyle = '#e9ecef';
+    gCtx.lineWidth = 1;
+    
+    // X軸の補助線と目盛りラベル
+    const xSteps = 4;
+    for (let i = 0; i <= xSteps; i++) {
+        const ratio = i / xSteps;
+        const val = minX + ratio * (maxX - minX);
+        const cx = toCanvasX(val);
+        
+        gCtx.beginPath();
+        gCtx.moveTo(cx, padT);
+        gCtx.lineTo(cx, padT + plotH);
+        gCtx.stroke();
+        
+        gCtx.fillStyle = 'var(--text-muted)';
+        gCtx.font = '8px var(--font-mono)';
+        gCtx.textAlign = 'center';
+        gCtx.fillText(val.toFixed(2), cx, padT + plotH + 11);
+    }
+    
+    // Y軸の補助線と目盛りラベル
+    const ySteps = 4;
+    for (let i = 0; i <= ySteps; i++) {
+        const ratio = i / ySteps;
+        const val = minY + ratio * (maxY - minY);
+        const cy = toCanvasY(val);
+        
+        gCtx.beginPath();
+        gCtx.moveTo(padL, cy);
+        gCtx.lineTo(padL + plotW, cy);
+        gCtx.stroke();
+        
+        gCtx.fillStyle = 'var(--text-muted)';
+        gCtx.font = '8px var(--font-mono)';
+        gCtx.textAlign = 'right';
+        gCtx.fillText(val.toFixed(1), padL - 5, cy + 3);
+    }
+    
+    // 黒い主軸線
+    gCtx.strokeStyle = '#495057';
+    gCtx.lineWidth = 1.2;
+    gCtx.beginPath();
+    gCtx.moveTo(padL, padT);
+    gCtx.lineTo(padL, padT + plotH);
+    gCtx.lineTo(padL + plotW, padT + plotH);
+    gCtx.stroke();
+    
+    // 軸名ラベルの描画
+    gCtx.fillStyle = 'var(--text-muted)';
+    gCtx.font = '8px var(--font-family)';
+    gCtx.textAlign = 'right';
+    gCtx.fillText(labelX, graphCanvas.width - 4, graphCanvas.height - 4);
+    gCtx.textAlign = 'left';
+    gCtx.fillText(labelY, 4, 8);
+    
+    // 線グラフ描画
+    gCtx.strokeStyle = COLOR_MAP[(appState.activeObjectId - 1) % COLOR_MAP.length];
+    gCtx.lineWidth = 1.8;
+    gCtx.beginPath();
+    
+    valX.forEach((vx, idx) => {
+        const cx = toCanvasX(vx);
+        const cy = toCanvasY(valY[idx]);
+        if (idx === 0) {
+            gCtx.moveTo(cx, cy);
+        } else {
+            gCtx.lineTo(cx, cy);
+        }
+    });
+    gCtx.stroke();
+    
+    // ドットプロット描画
+    valX.forEach((vx, idx) => {
+        const cx = toCanvasX(vx);
+        const cy = toCanvasY(valY[idx]);
+        gCtx.beginPath();
+        
+        // 選択されたポイントはプロット上でも大きく表示する
+        const isSel = (data[idx].id === appState.selectedPointId);
+        gCtx.arc(cx, cy, isSel ? 4.5 : 3.0, 0, Math.PI * 2);
+        gCtx.fillStyle = COLOR_MAP[(appState.activeObjectId - 1) % COLOR_MAP.length];
+        gCtx.fill();
+        gCtx.strokeStyle = isSel ? '#d93025' : '#ffffff';
+        gCtx.lineWidth = isSel ? 1.5 : 1;
+        gCtx.stroke();
+    });
+}
+
+// --- エクスポート ---
+function setupExport() {
+    const btnExport = document.getElementById('btn-export');
+    if (!btnExport) return;
+    
+    btnExport.addEventListener('click', () => {
+        if (appState.trackingData.length === 0) {
+            logDebug("エクスポートするデータがありません。");
+            return;
+        }
+        
+        let csvContent = "t (s)\tx (cm_or_px)\ty (cm_or_px)\tobject_id\n";
+        
+        const sorted = [...appState.trackingData].sort((a, b) => {
+            if (a.objectId !== b.objectId) return a.objectId - b.objectId;
+            return a.frame - b.frame;
+        });
+        
+        sorted.forEach(p => {
+            let physX = p.x;
+            let physY = p.y;
+            if (appState.calibration.origin) {
+                physX = p.x - appState.calibration.origin.x;
+                physY = appState.calibration.origin.y - p.y;
+            }
+            if (appState.calibration.scaleRatio) {
+                physX *= appState.calibration.scaleRatio;
+                physY *= appState.calibration.scaleRatio;
+            }
+            csvContent += `${p.time.toFixed(3)}\t${physX.toFixed(3)}\t${physY.toFixed(3)}\t${p.objectId}\n`;
+        });
+        
+        const dialogText = `
+            <textarea style="width:100%; height:130px; font-family:var(--font-mono); background:#ffffff; color:#212529; border:1px solid var(--border-color); border-radius:4px; padding:8px; font-size:0.8rem;" readonly>${csvContent}</textarea>
+            <div style="margin-top:10px; display:flex; gap:8px;">
+                <button class="btn btn-secondary" id="btn-copy-tsv" style="flex:1; font-size:0.8rem;">コピー</button>
+                <button class="btn btn-primary" id="btn-download-tsv" style="flex:1; font-size:0.8rem;">ファイル保存</button>
+            </div>
+        `;
+        
+        showInputDialog("データエクスポート (TSV形式)", dialogText, "", () => {});
+        
+        document.getElementById('btn-copy-tsv').addEventListener('click', () => {
+            navigator.clipboard.writeText(csvContent)
+                .then(() => logDebug("TSVをコピーしました"))
+                .catch(() => logDebug("コピー失敗"));
+        });
+        
+        document.getElementById('btn-download-tsv').addEventListener('click', () => {
+            const blob = new Blob([csvContent], { type: 'text/tab-separated-values;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", "tracking_data.tsv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            logDebug("TSVファイルをダウンロードしました");
+        });
+    });
+}
+
+// --- ダイアログの制御 ---
+function showInputDialog(title, bodyText, defaultValue, onOk) {
+    const overlay = document.getElementById('dialog-overlay');
+    const titleEl = document.getElementById('dialog-title');
+    const bodyEl = document.getElementById('dialog-body');
+    const btnCancel = document.getElementById('dialog-btn-cancel');
+    const btnOk = document.getElementById('dialog-btn-ok');
+    
+    if (!overlay) return;
+    
+    titleEl.textContent = title;
+    
+    if (bodyText.includes("<textarea>") || bodyText.includes("<input>")) {
+        bodyEl.innerHTML = bodyText;
+    } else {
+        bodyEl.innerHTML = `
+            <p>${bodyText}</p>
+            <input type="text" id="dialog-input-val" value="${defaultValue}">
+        `;
+    }
+    
+    overlay.style.display = 'flex';
+    
+    const cleanup = () => {
+        overlay.style.display = 'none';
+        const newOk = btnOk.cloneNode(true);
+        const newCancel = btnCancel.cloneNode(true);
+        btnOk.parentNode.replaceChild(newOk, btnOk);
+        btnCancel.parentNode.replaceChild(newCancel, btnCancel);
+    };
+    
+    document.getElementById('dialog-btn-ok').addEventListener('click', () => {
+        const inputEl = document.getElementById('dialog-input-val');
+        const val = inputEl ? inputEl.value : "";
+        cleanup();
+        onOk(val);
+    });
+    
+    document.getElementById('dialog-btn-cancel').addEventListener('click', () => {
+        cleanup();
+    });
+}
+
+// --- Node.js テスト用および統合テスト用エクスポート ---
+window.canvasToVideo = canvasToVideo;
+window.videoToCanvas = videoToCanvas;
+window.videoToLocalCanvas = videoToLocalCanvas;
+window.seekToFrame = seekToFrame;
+window.stepFrame = stepFrame;
+window.setAppMode = setAppMode;
+window.handleCanvasClick = handleCanvasClick;
+window.resetZoom = resetZoom;
+window.updateGraph = updateGraph;
+window.deletePoint = deletePoint;
+
+if (typeof module !== 'undefined') {
+    module.exports = {
+        appState,
+        canvasToVideo,
+        videoToCanvas,
+        videoToLocalCanvas,
+        seekToFrame,
+        stepFrame,
+        sampleColor,
+        test_setVars: (vars) => {
+            if (vars.canvas !== undefined) appState.canvas = vars.canvas;
+            if (vars.videoElement !== undefined) appState.videoElement = vars.videoElement;
+            if (vars.viewState !== undefined) appState.viewState = vars.viewState;
+            if (vars.calibration !== undefined) appState.calibration = vars.calibration;
+            if (vars.trackingData !== undefined) appState.trackingData = vars.trackingData;
+        }
+    };
+}

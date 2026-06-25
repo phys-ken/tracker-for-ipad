@@ -1,0 +1,644 @@
+:root {
+    /* 白ベースのシンプルで一般的なカラーパレット */
+    --bg-base: #f8f9fa;
+    --bg-panel: #ffffff;
+    --border-color: #dee2e6;
+    --border-hover: #ced4da;
+    
+    --accent-blue: #1a73e8; /* Googleライクなクリーンなブルー */
+    --accent-blue-hover: #1557b0;
+    --accent-red: #d93025;
+    --accent-red-hover: #b31412;
+    --accent-green: #188038;
+    
+    --text-main: #212529;
+    --text-muted: #5f6368;
+    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+    
+    --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+    --border-radius: 6px;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+}
+
+body {
+    background-color: var(--bg-base);
+    color: var(--text-main);
+    font-family: var(--font-family);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* App Container Layout */
+.app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 12px;
+    gap: 12px;
+}
+
+/* Header Design (フラットでシンプルに) */
+.app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-main);
+}
+
+.logo-area {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.brand-icon {
+    font-size: 1.8rem;
+    color: var(--accent-blue);
+}
+
+.app-header h1 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.badge {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    background: #e8f0fe;
+    color: var(--accent-blue);
+    border: 1px solid #d2e3fc;
+    border-radius: 4px;
+    margin-left: 6px;
+    font-weight: 500;
+}
+
+/* Main Workspace Layout */
+.workspace {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    flex: 1;
+    gap: 12px;
+    min-height: 0;
+}
+
+/* Left: Viewer Section */
+.viewer-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+}
+
+.canvas-container {
+    position: relative;
+    flex: 1;
+    background: #eaeaea;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#tracker-canvas {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    touch-action: none;
+    background-color: #000000;
+}
+
+.hint-overlay {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    pointer-events: none;
+    transition: opacity 0.3s;
+}
+
+.hint-overlay span {
+    font-size: 3rem;
+    color: var(--text-muted);
+}
+
+.canvas-floating-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 6px;
+}
+
+/* Video Controls Bar */
+.video-controls-bar {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    box-shadow: var(--shadow-main);
+}
+
+.playback-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.slider-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 200px;
+}
+
+#frame-slider {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: #e0e0e0;
+    outline: none;
+    -webkit-appearance: none;
+    accent-color: var(--accent-blue);
+    cursor: pointer;
+}
+
+.time-display {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.info-indicators {
+    display: flex;
+    gap: 8px;
+}
+
+.indicator {
+    background: #f1f3f4;
+    border: 1px solid var(--border-color);
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    display: flex;
+    gap: 4px;
+}
+
+.indicator .label {
+    color: var(--text-muted);
+}
+
+.indicator .value {
+    color: var(--text-main);
+    font-weight: bold;
+}
+
+/* Right: Sidebar Panel Setup */
+.sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+}
+
+.panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: var(--shadow-main);
+}
+
+.panel h2 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 6px;
+    margin-bottom: 2px;
+}
+
+/* Mode toggles (シンプルなフラットボタンのグループ) */
+.mode-toggle-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    background: #f1f3f4;
+    padding: 3px;
+    border-radius: 4px;
+}
+
+.btn-mode {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: var(--font-family);
+    padding: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.btn-mode.active {
+    background: #ffffff;
+    color: var(--accent-blue);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+.setup-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.calibration-info {
+    margin-top: 2px;
+    background: #f1f3f4;
+    padding: 6px 10px;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.cal-row {
+    display: flex;
+    justify-content: space-between;
+}
+
+.cal-row span:last-child {
+    font-family: var(--font-mono);
+    color: var(--text-main);
+    font-weight: 500;
+}
+
+/* Data Panel & Table */
+.data-panel {
+    flex: 1;
+    min-height: 0;
+}
+
+.panel-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 6px;
+}
+
+.panel-header-row h2 {
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+
+.table-container {
+    flex: 1;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #ffffff;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.data-table th, .data-table td {
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.data-table th {
+    background: #f1f3f4;
+    color: var(--text-muted);
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.data-table tr:last-child td {
+    border-bottom: none;
+}
+
+.data-table td {
+    font-family: var(--font-mono);
+    vertical-align: middle;
+}
+
+.empty-row td {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 20px;
+    font-family: var(--font-family);
+}
+
+/* Buttons Design (すっきりとしたフラットUI) */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-family: var(--font-family);
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 8px 14px;
+    border-radius: var(--border-radius);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+}
+
+.btn-small {
+    padding: 4px 10px;
+    font-size: 0.78rem;
+    border-radius: 4px;
+}
+
+.btn-primary {
+    background: var(--accent-blue);
+    color: #ffffff;
+}
+
+.btn-primary:hover {
+    background: var(--accent-blue-hover);
+}
+
+.btn-secondary {
+    background: #ffffff;
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+}
+
+.btn-secondary:hover {
+    background: #f1f3f4;
+    border-color: var(--border-hover);
+}
+
+.btn-danger-small {
+    background: #fce8e6;
+    color: var(--accent-red);
+    border: 1px solid #fad2cf;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: var(--font-family);
+    cursor: pointer;
+    font-size: 0.72rem;
+    transition: all 0.1s;
+}
+
+.btn-danger-small:hover {
+    background: var(--accent-red);
+    color: #ffffff;
+    border-color: var(--accent-red);
+}
+
+.btn-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 4px;
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+
+.btn-icon:hover {
+    background: #f1f3f4;
+}
+
+.btn-accent {
+    background: var(--accent-blue);
+    color: #ffffff;
+    border: none;
+}
+
+.btn-accent:hover {
+    background: var(--accent-blue-hover);
+}
+
+/* Dialog Design */
+.dialog-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.dialog {
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 20px;
+    width: 380px;
+    max-width: 90vw;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.dialog h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.dialog-body {
+    font-size: 0.88rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.dialog-body input {
+    width: 100%;
+    padding: 8px;
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-main);
+    font-family: var(--font-family);
+    margin-top: 6px;
+    outline: none;
+}
+
+.dialog-body input:focus {
+    border-color: var(--accent-blue);
+}
+
+.dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+/* Footer / Debug Logger */
+.app-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.debug-toggle-btn {
+    align-self: flex-start;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: var(--font-family);
+    font-size: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+}
+
+.debug-toggle-btn:hover {
+    color: var(--text-main);
+}
+
+.debug-console {
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 120px;
+    box-shadow: var(--shadow-main);
+}
+
+.debug-header {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-family);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 4px;
+}
+
+.btn-clear {
+    background: transparent;
+    border: none;
+    color: var(--accent-red);
+    cursor: pointer;
+    font-size: 0.75rem;
+}
+
+.debug-log-list {
+    flex: 1;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: #444444;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* control-settings-row and setting-item styles */
+.control-settings-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+.setting-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.setting-item input {
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-main);
+    padding: 6px;
+    outline: none;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+.setting-item input:focus {
+    border-color: var(--accent-blue);
+}
+
+/* iPad Responsive Adjustments */
+@media (max-width: 1024px) {
+    .workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr auto;
+    }
+    
+    .sidebar-section {
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 12px;
+    }
+    
+    .data-panel {
+        grid-column: span 2;
+        max-height: 200px;
+    }
+}
+
+@media (max-width: 768px) {
+    .sidebar-section {
+        grid-template-columns: 1fr;
+    }
+    .data-panel {
+        grid-column: span 1;
+    }
+}

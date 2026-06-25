@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>iPad Video Tracker</title>
+    <!-- Google Fonts & Material Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo-area">
+                <span class="material-icons-round brand-icon">analytics</span>
+                <h1>Physics Tracker <span class="badge">iPad Edition</span></h1>
+            </div>
+            <div class="header-actions">
+                <label for="video-upload" class="btn btn-primary">
+                    <span class="material-icons-round">video_file</span>
+                    動画を選択
+                </label>
+                <input type="file" id="video-upload" accept="video/*" style="display: none;">
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <div class="workspace">
+            <!-- Left: Viewer Area -->
+            <div class="viewer-section">
+                <div class="canvas-container" id="canvas-container">
+                    <canvas id="tracker-canvas"></canvas>
+                    <div class="hint-overlay" id="hint-overlay">
+                        <span class="material-icons-round">cloud_upload</span>
+                        <p>動画を読み込んで分析を開始してください</p>
+                    </div>
+                    <!-- Zoom/Pan controls on canvas -->
+                    <div class="canvas-floating-controls">
+                        <button class="btn-icon" id="btn-zoom-reset" title="ズームリセット">
+                            <span class="material-icons-round">aspect_ratio</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Video Controls Bar -->
+                <div class="video-controls-bar">
+                    <div class="playback-controls">
+                        <button class="btn-icon" id="btn-prev-10" title="10フレーム戻る">
+                            <span class="material-icons-round">replay_10</span>
+                        </button>
+                        <button class="btn-icon" id="btn-prev-1" title="1フレーム戻る">
+                            <span class="material-icons-round">chevron_left</span>
+                        </button>
+                        <button class="btn-icon btn-accent" id="btn-play-pause" title="再生 / 一時停止">
+                            <span class="material-icons-round">play_arrow</span>
+                        </button>
+                        <button class="btn-icon" id="btn-next-1" title="1フレーム進む">
+                            <span class="material-icons-round">chevron_right</span>
+                        </button>
+                        <button class="btn-icon" id="btn-next-10" title="10フレーム進む">
+                            <span class="material-icons-round">forward_10</span>
+                        </button>
+                    </div>
+
+                    <div class="slider-container">
+                        <input type="range" id="frame-slider" min="0" max="100" value="0" disabled>
+                        <span class="time-display" id="time-display">00:00 / 00:00</span>
+                    </div>
+
+                    <div class="info-indicators">
+                        <div class="indicator">
+                            <span class="label">FRAME:</span>
+                            <span class="value" id="lbl-frame">0</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="label">FPS:</span>
+                            <span class="value" id="lbl-fps">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Toolbar & Data Panel -->
+            <div class="sidebar-section">
+                <!-- Modes Panel -->
+                <div class="panel">
+                    <h2>コントロール</h2>
+                    <div class="mode-toggle-group">
+                        <button class="btn-mode active" id="mode-select">
+                            <span class="material-icons-round">ads_click</span>
+                            <span>微調整</span>
+                        </button>
+                        <button class="btn-mode" id="mode-track">
+                            <span class="material-icons-round">add_circle_outline</span>
+                            <span>トラック</span>
+                        </button>
+                    </div>
+                    <div class="control-settings-row">
+                        <div class="setting-item">
+                            <label for="object-id-select">物体ID:</label>
+                            <input type="number" id="object-id-select" min="1" max="10" value="1">
+                        </div>
+                        <div class="setting-item">
+                            <label for="step-size-select">ステップ幅:</label>
+                            <input type="number" id="step-size-select" min="1" max="30" value="1">
+                        </div>
+                    </div>
+                    <div style="margin-top: 6px;">
+                        <button class="btn btn-secondary btn-small" id="btn-delete-selected" style="width: 100%; color: var(--accent-red); border-color: #fad2cf; background: #fce8e6;" disabled>
+                            <span class="material-icons-round" style="font-size: 1.1rem; vertical-align: middle;">delete_sweep</span>
+                            選択ポイントを削除
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Setup Calibration -->
+                <div class="panel">
+                    <h2>設定 (キャリブレーション)</h2>
+                    <div class="setup-grid">
+                        <button class="btn btn-secondary" id="btn-set-origin">
+                            <span class="material-icons-round">center_focus_strong</span>
+                            原点を設定
+                        </button>
+                        <button class="btn btn-secondary" id="btn-set-scale">
+                            <span class="material-icons-round">linear_scale</span>
+                            スケール設定
+                        </button>
+                    </div>
+                    <div class="calibration-info">
+                        <div class="cal-row">
+                            <span>原点:</span>
+                            <span id="info-origin">未設定</span>
+                        </div>
+                        <div class="cal-row">
+                            <span>スケール:</span>
+                            <span id="info-scale">未設定</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Auto Tracker Panel -->
+                <div class="panel">
+                    <h2>オートトラック (自動色追跡)</h2>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-secondary" id="btn-auto-track-step" style="flex: 1; padding: 8px 12px; font-size: 0.85rem;">
+                                <span class="material-icons-round" style="font-size: 1.1rem; vertical-align: middle;">play_circle_outline</span>
+                                1コマ追跡
+                            </button>
+                            <button class="btn btn-primary" id="btn-auto-track-run" style="flex: 1; padding: 8px 12px; font-size: 0.85rem;">
+                                <span class="material-icons-round" style="font-size: 1.1rem; vertical-align: middle;">smart_toy</span>
+                                自動追跡
+                            </button>
+                            <button class="btn btn-danger-small" id="btn-auto-track-stop" style="display: none; flex: 1; padding: 8px 12px; font-size: 0.85rem; justify-content: center; align-items: center; gap: 8px;">
+                                <span class="material-icons-round" style="font-size: 1.1rem; vertical-align: middle;">stop</span>
+                                停止
+                            </button>
+                        </div>
+                        <div class="control-settings-row">
+                            <div class="setting-item">
+                                <label for="track-threshold" style="font-size:0.75rem;">感度 (閾値: 0-150):</label>
+                                <input type="range" id="track-threshold" min="5" max="150" value="40" style="width:100%; margin: 4px 0;">
+                                <span id="lbl-threshold" style="font-family:var(--font-mono); font-size:0.75rem; text-align:right;">40</span>
+                            </div>
+                            <div class="setting-item">
+                                <label for="track-window-size" style="font-size:0.75rem;">探索範囲 (px):</label>
+                                <input type="number" id="track-window-size" min="10" max="200" value="60" style="margin-top: 2px;">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Realtime Graph Panel -->
+                <div class="panel" style="min-height: 200px;">
+                    <div class="panel-header-row" style="border:none; padding:0;">
+                        <h2>リアルタイムグラフ</h2>
+                        <select id="graph-type-select" style="font-size: 0.75rem; padding: 2px 4px; border: 1px solid var(--border-color); border-radius: 4px; outline:none;">
+                            <option value="y-t">y - t (垂直変位)</option>
+                            <option value="x-t">x - t (水平変位)</option>
+                            <option value="y-x">y - x (軌道描画)</option>
+                        </select>
+                    </div>
+                    <div style="flex: 1; min-height: 120px; background: #f1f3f4; border: 1px solid var(--border-color); border-radius: 4px; position: relative;">
+                        <canvas id="graph-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
+                    </div>
+                </div>
+
+                <!-- Data Table Panel -->
+                <div class="panel data-panel">
+                    <div class="panel-header-row">
+                        <h2>測定データ</h2>
+                        <button class="btn btn-small btn-primary" id="btn-export">
+                            <span class="material-icons-round">download</span>
+                            保存
+                        </button>
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table" id="data-table">
+                            <thead>
+                                <tr>
+                                    <th>t (s)</th>
+                                    <th>x (px)</th>
+                                    <th>y (px)</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="empty-row">
+                                    <td colspan="4">データがありません</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Debug Logger Display (for iPad diagnostics) -->
+        <footer class="app-footer">
+            <button class="debug-toggle-btn" id="btn-toggle-debug">
+                <span class="material-icons-round">bug_report</span> デバッグログ
+            </button>
+            <div class="debug-console" id="debug-console" style="display: none;">
+                <div class="debug-header">
+                    <span>Console Output</span>
+                    <button class="btn-clear" id="btn-clear-debug">Clear</button>
+                </div>
+                <div class="debug-log-list" id="debug-log-list"></div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Dialogs -->
+    <div class="dialog-overlay" id="dialog-overlay" style="display: none;">
+        <div class="dialog">
+            <h3 id="dialog-title">タイトル</h3>
+            <div class="dialog-body" id="dialog-body">
+                コンテンツ
+            </div>
+            <div class="dialog-actions">
+                <button class="btn btn-secondary" id="dialog-btn-cancel">キャンセル</button>
+                <button class="btn btn-primary" id="dialog-btn-ok">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden Video Element for background playing & frame capturing -->
+    <video id="hidden-video" style="display: none;" playsinline muted></video>
+
+    <script src="app.js"></script>
+</body>
+</html>
