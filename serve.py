@@ -26,7 +26,21 @@ class MyHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
 Handler = MyHTTPRequestHandler
 
-with socketserver.TCPServer(("", PORT), Handler) as httpd:
+
+class DualStackServer(socketserver.TCPServer):
+    # IPv6 で待ち受けつつ IPv4 も受ける（localhost=::1 でも 127.0.0.1 でも繋がる）
+    allow_reuse_address = True
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        try:
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except (AttributeError, OSError):
+            pass
+        super().server_bind()
+
+
+with DualStackServer(("", PORT), Handler) as httpd:
     ip_addr = get_ip_address()
     print("--- Local Development Server ---")
     print(f"PC Local Access: http://localhost:{PORT}")
