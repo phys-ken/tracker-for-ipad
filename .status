@@ -2,7 +2,11 @@
 # LLM・AIエージェントが定期レビューに使うファイルです。git 管理対象です。
 status: develop
 created: 2026-06-25
-description: （未記入）
-github: 
-last_reviewed:
-notes:
+description: 動画から運動(位置/速度/加速度)を測る iPad向け解析ツール。中央十字＋確定方式。
+github:
+last_reviewed: 2026-06-25
+notes: >
+  低級LLM版を全面改修。Stage1=中央十字＋確定/校正バグ修正/下部固定バー、
+  Stage2=FPS実測(rVFC)＋読込プレビュー、Stage3=速度/加速度グラフ＋連動＋TSV/xlsx出力、
+  Stage4=物体色ボタン/オートトラック格下げ。デザインは"計器/ストロボ"。
+  MANUAL.md / DESIGN.md あり。マニュアルの実機スクショは未挿入(自動環境で取得不可、img/にスロット用意)。
