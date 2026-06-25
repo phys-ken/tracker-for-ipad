@@ -12,7 +12,8 @@ const appState = {
     currentFrame: 0,
     totalFrames: 0,
     viewState: { scale: 1, offsetX: 0, offsetY: 0 },
-    appMode: 'select', // 'select' | 'track' | 'origin' | 'scale'
+    // 中央十字＋確定方式: 通常はトラッキング。原点/スケール設定中だけ pendingCapture が立つ
+    pendingCapture: null, // null | 'origin' | 'scale'
     trackingData: [], // [{ id, frame, time, x, y, objectId }]
     activeObjectId: 1,
     trackingStepSize: 1,
@@ -70,6 +71,86 @@ function logDebug(message) {
     console.log(message);
 }
 
+// --- Undo 履歴 ＆ 自動保存 -------------------------------------------------
+// （UndoボタンのUI配線・手順ガイド等の本格対応は Stage4。ここでは中核のみ）
+const undoStack = [];
+const UNDO_LIMIT = 50;
+const STORAGE_KEY = 'tracker_for_ipad_state_v1';
+
+// 変更直前の状態をスナップショットして履歴に積む
+function pushHistory() {
+    try {
+        undoStack.push(JSON.stringify({
+            trackingData: appState.trackingData,
+            calibration: appState.calibration
+        }));
+        if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    } catch (e) { /* 容量超過などは無視 */ }
+    updateUndoButton();
+}
+
+function undo() {
+    const snap = undoStack.pop();
+    if (!snap) return;
+    try {
+        const obj = JSON.parse(snap);
+        appState.trackingData = obj.trackingData || [];
+        appState.calibration = obj.calibration || appState.calibration;
+        setSelectedPoint(null);
+        refreshCalibrationLabels();
+        persistState();
+        updateDataTable();
+        drawVideoFrame();
+        updateGraph();
+        logDebug('元に戻しました');
+    } catch (e) { logDebug('Undo失敗'); }
+    updateUndoButton();
+}
+
+function updateUndoButton() {
+    const btn = document.getElementById('btn-undo');
+    if (btn) btn.disabled = undoStack.length === 0;
+}
+
+// localStorage への自動保存（動画自体は保存せず、計測データと校正のみ）
+function persistState() {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+            trackingData: appState.trackingData,
+            calibration: appState.calibration,
+            videoFps: appState.videoFps,
+            trackingStepSize: appState.trackingStepSize,
+            activeObjectId: appState.activeObjectId
+        }));
+    } catch (e) { /* プライベートモード等では無視 */ }
+}
+
+function loadPersistedState() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return false;
+        const obj = JSON.parse(raw);
+        if (Array.isArray(obj.trackingData) && obj.trackingData.length > 0) {
+            appState.trackingData = obj.trackingData;
+            if (obj.calibration) appState.calibration = obj.calibration;
+            if (obj.videoFps) appState.videoFps = obj.videoFps;
+            if (obj.trackingStepSize) appState.trackingStepSize = obj.trackingStepSize;
+            if (obj.activeObjectId) appState.activeObjectId = obj.activeObjectId;
+            return true;
+        }
+    } catch (e) { /* 破損データは無視 */ }
+    return false;
+}
+
+// 校正ラベル（原点/スケール表示）を現在の状態に同期
+function refreshCalibrationLabels() {
+    const o = appState.calibration.origin;
+    const infoO = document.getElementById('info-origin');
+    if (infoO) infoO.textContent = o ? `(${o.x.toFixed(0)}, ${o.y.toFixed(0)})` : '未設定';
+    const infoS = document.getElementById('info-scale');
+    if (infoS) infoS.textContent = appState.calibration.scaleRatio ? `${appState.calibration.scaleRatio.toFixed(3)} cm/px` : '未設定';
+}
+
 // --- DOM初期化 ---
 document.addEventListener('DOMContentLoaded', () => {
     logDebug("アプリケーション起動");
@@ -80,6 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // 各種初期化
     setupFileUpload();
+    setupSampleLoad();
     setupPlaybackControls();
     setupDebugConsole();
     setupCanvasTouch();
@@ -89,20 +171,58 @@ document.addEventListener('DOMContentLoaded', () => {
     setupAutoTrackerUI();
     setupGraphEvents();
     setupDeletionEvent();
-    
+    setupUndo();
+
     // ウィンドウリサイズ時の処理
     window.addEventListener('resize', handleResize);
     window.addEventListener('resize', updateGraph);
 
-    // デフォルト動画 (sample.mp4) の自動ロード試行
-    logDebug("デフォルト動画 (sample.mp4) のロードを開始します...");
-    appState.videoElement.src = "sample.mp4";
-    appState.videoElement.load();
-    const hintOverlay = document.getElementById('hint-overlay');
-    if (hintOverlay) {
-        hintOverlay.style.opacity = '0';
+    // 前回の作業（計測データ・校正）を自動復帰。動画は再選択が必要。
+    if (loadPersistedState()) {
+        logDebug("前回の計測データを復帰しました（動画は読み込み直してください）。");
+        refreshCalibrationLabels();
+        updateDataTable();
+        updateGraph();
     }
+    updateUndoButton();
+    updateActionHint();
+
+    // 空スタート: 動画はユーザーが「動画を選択」または「サンプルで試す」で読み込む
+    logDebug("起動完了。動画を読み込んでください。");
 });
+
+// --- サンプル動画の読み込み（fetch経由のバックドア） ---
+// 生徒の「お試し」用 兼 自動テスト用。アップロードダイアログを回避して
+// サーバ上の sample.mp4 を直接 Blob 化して読み込む。
+function setupSampleLoad() {
+    const btn = document.getElementById('btn-load-sample');
+    if (btn) btn.addEventListener('click', loadSampleVideo);
+}
+
+function loadSampleVideo() {
+    logDebug("サンプル動画 (sample.mp4) を読み込みます...");
+    fetch('sample.mp4')
+        .then(res => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.blob();
+        })
+        .then(blob => {
+            if (appState.videoElement.src && appState.videoElement.src.startsWith('blob:')) {
+                URL.revokeObjectURL(appState.videoElement.src);
+            }
+            const url = URL.createObjectURL(blob);
+            const hintOverlay = document.getElementById('hint-overlay');
+            if (hintOverlay) hintOverlay.style.opacity = '0';
+            appState.videoElement.src = url;
+            appState.videoElement.load();
+        })
+        .catch(err => logDebug(`サンプル読み込み失敗: ${err.message}（ローカルサーバ経由で開いてください）`));
+}
+
+function setupUndo() {
+    const btn = document.getElementById('btn-undo');
+    if (btn) btn.addEventListener('click', undo);
+}
 
 // --- デバッグコンソールのトグル ---
 function setupDebugConsole() {
@@ -345,8 +465,57 @@ function drawVideoFrame() {
     // キャリブレーションマーカーとトラックポイントの描画
     drawCalibrationMarkers();
     drawTrackingPoints();
-    
+
     appState.ctx.restore();
+
+    // 画面中央の固定十字（スクリーン座標・ズーム非依存）
+    drawCrosshair();
+}
+
+// --- 中央十字（照準）の描画 ---
+function drawCrosshair() {
+    const ctx = appState.ctx;
+    const cx = appState.canvas.width / 2;
+    const cy = appState.canvas.height / 2;
+    const isCalib = appState.pendingCapture !== null;
+    const color = isCalib ? '#1a73e8' : '#ff3b30';
+
+    ctx.save();
+    ctx.lineWidth = 1.5;
+
+    // 外側の縁取り（白）で視認性確保
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 3;
+    drawReticlePath(ctx, cx, cy);
+    ctx.stroke();
+
+    // 本体
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    drawReticlePath(ctx, cx, cy);
+    ctx.stroke();
+
+    // 中心の小さなドット
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.restore();
+}
+
+function drawReticlePath(ctx, cx, cy) {
+    const gap = 6;   // 中心の空き
+    const len = 16;  // 線の長さ
+    const r = 14;    // 円の半径
+    ctx.beginPath();
+    // 上下左右の線（中心を空ける）
+    ctx.moveTo(cx, cy - gap); ctx.lineTo(cx, cy - gap - len);
+    ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, cy + gap + len);
+    ctx.moveTo(cx - gap, cy); ctx.lineTo(cx - gap - len, cy);
+    ctx.moveTo(cx + gap, cy); ctx.lineTo(cx + gap + len, cy);
+    // 円
+    ctx.moveTo(cx + r, cy);
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
 }
 
 // --- 座標変換関数 ---
@@ -408,8 +577,9 @@ function handlePointerDown(e) {
     const localY = e.clientY - rect.top;
     
     if (activePointers.length === 1) {
+        // 1本指は常に映像のパン（点打ちは「確定」ボタンに集約）
         lastPointerPos = { x: localX, y: localY };
-        handleCanvasClick(e);
+        isPanning = false;
     } else if (activePointers.length === 2) {
         const p1 = activePointers[0];
         const p2 = activePointers[1];
@@ -440,15 +610,8 @@ function handlePointerMove(e) {
     const localY = e.clientY - rect.top;
     
     if (activePointers.length === 1) {
-        if (isDraggingPoint && draggedPointIndex !== -1) {
-            const vPos = canvasToVideo(localX, localY);
-            appState.trackingData[draggedPointIndex].x = vPos.x;
-            appState.trackingData[draggedPointIndex].y = vPos.y;
-            
-            drawVideoFrame();
-            updateDataTable();
-            updateGraph();
-        } else if (appState.appMode === 'select' && lastPointerPos && !isPanning) {
+        // 1本指ドラッグ = 映像のパン（十字に対象を合わせるための操作）
+        if (lastPointerPos) {
             const dx = localX - lastPointerPos.x;
             const dy = localY - lastPointerPos.y;
             appState.viewState.offsetX += dx;
@@ -543,25 +706,62 @@ function resetZoom() {
     logDebug("ズームリセット");
 }
 
-// --- モード切替 ---
-function setAppMode(mode) {
-    appState.appMode = mode;
-    document.getElementById('mode-select').classList.toggle('active', mode === 'select');
-    document.getElementById('mode-track').classList.toggle('active', mode === 'track');
-    document.getElementById('btn-set-origin').classList.toggle('active', mode === 'origin');
-    document.getElementById('btn-set-scale').classList.toggle('active', mode === 'scale');
-    logDebug(`モード切り替え: ${mode}`);
-    
-    // モード切り替え時に選択を解除
-    setSelectedPoint(null);
+// --- 保留アクション（原点/スケール設定）の切替 ---
+function setPendingCapture(mode) {
+    appState.pendingCapture = mode;
+    // スケール設定を抜けるときは一時始点をクリア
+    if (mode !== 'scale') appState.calibration.scaleTempStart = null;
+
+    const btnOrigin = document.getElementById('btn-set-origin');
+    const btnScale = document.getElementById('btn-set-scale');
+    if (btnOrigin) btnOrigin.classList.toggle('active', mode === 'origin');
+    if (btnScale) btnScale.classList.toggle('active', mode === 'scale');
+
+    updateActionHint();
+    logDebug(`保留アクション: ${mode || 'なし（トラッキング）'}`);
+}
+
+// 確定ボタンのラベルと、今やるべき操作のヒントを更新
+function updateActionHint() {
+    const btnConfirm = document.getElementById('btn-confirm');
+    const hint = document.getElementById('action-hint');
+    let label = '確定（点を打つ）';
+    let text = '十字を対象に合わせて「確定」';
+
+    if (appState.pendingCapture === 'origin') {
+        label = '原点をここに確定';
+        text = '十字を原点に合わせて「確定」';
+    } else if (appState.pendingCapture === 'scale') {
+        if (appState.calibration.scaleTempStart) {
+            label = 'スケール終点を確定';
+            text = '十字を「既知の長さ」の終点に合わせて「確定」';
+        } else {
+            label = 'スケール始点を確定';
+            text = '十字を「既知の長さ」の始点に合わせて「確定」';
+        }
+    }
+    if (btnConfirm) {
+        const span = btnConfirm.querySelector('.confirm-label');
+        if (span) span.textContent = label;
+    }
+    if (hint) hint.textContent = text;
 }
 
 function setupModeButtons() {
-    document.getElementById('mode-select').addEventListener('click', () => setAppMode('select'));
-    document.getElementById('mode-track').addEventListener('click', () => setAppMode('track'));
-    document.getElementById('btn-set-origin').addEventListener('click', () => setAppMode('origin'));
-    document.getElementById('btn-set-scale').addEventListener('click', () => setAppMode('scale'));
-    document.getElementById('btn-zoom-reset').addEventListener('click', resetZoom);
+    const btnConfirm = document.getElementById('btn-confirm');
+    const btnOrigin = document.getElementById('btn-set-origin');
+    const btnScale = document.getElementById('btn-set-scale');
+    const btnZoomReset = document.getElementById('btn-zoom-reset');
+
+    if (btnConfirm) btnConfirm.addEventListener('click', confirmAtCrosshair);
+    // 原点/スケールボタンはトグル: 押すと保留、もう一度押すとキャンセル
+    if (btnOrigin) btnOrigin.addEventListener('click', () => {
+        setPendingCapture(appState.pendingCapture === 'origin' ? null : 'origin');
+    });
+    if (btnScale) btnScale.addEventListener('click', () => {
+        setPendingCapture(appState.pendingCapture === 'scale' ? null : 'scale');
+    });
+    if (btnZoomReset) btnZoomReset.addEventListener('click', resetZoom);
 }
 
 // 設定入力欄のイベント設定
@@ -587,107 +787,104 @@ function setupSettingsInputs() {
     }
 }
 
-// --- キャンバス上のクリック/タップイベント ---
-function handleCanvasClick(e) {
-    const rect = appState.canvas.getBoundingClientRect();
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    
-    const vPos = canvasToVideo(cx, cy);
-    
-    if (appState.appMode === 'track') {
-        const existingIndex = appState.trackingData.findIndex(p => p.frame === appState.currentFrame && p.objectId === appState.activeObjectId);
-        const newPoint = {
-            id: Date.now(),
-            frame: appState.currentFrame,
-            time: appState.currentFrame / appState.videoFps,
-            x: vPos.x,
-            y: vPos.y,
-            objectId: appState.activeObjectId
-        };
-        
-        if (existingIndex >= 0) {
-            appState.trackingData[existingIndex] = newPoint;
-        } else {
-            appState.trackingData.push(newPoint);
-        }
-        
-        appState.targetColor = sampleColor(vPos.x, vPos.y);
-        if (appState.targetColor) {
-            logDebug(`色をサンプリングしました: RGB(${appState.targetColor.r}, ${appState.targetColor.g}, ${appState.targetColor.b})`);
-        }
-        
-        logDebug(`ポイント登録: Frame ${appState.currentFrame}, X: ${vPos.x.toFixed(1)}, Y: ${vPos.y.toFixed(1)}`);
-        updateDataTable();
-        drawVideoFrame();
-        updateGraph();
-        
-        stepFrame(appState.trackingStepSize);
-        
-    } else if (appState.appMode === 'select') {
-        let foundIndex = -1;
-        let minDist = 15; // 判定半径 (px)
-        
-        appState.trackingData.forEach((p, idx) => {
-            if (p.frame === appState.currentFrame) {
-                const pCanvas = videoToCanvas(p.x, p.y);
-                const dist = Math.hypot(pCanvas.x - cx, pCanvas.y - cy);
-                if (dist < minDist) {
-                    minDist = dist;
-                    foundIndex = idx;
-                }
-            }
-        });
-        
-        if (foundIndex >= 0) {
-            isDraggingPoint = true;
-            draggedPointIndex = foundIndex;
-            setSelectedPoint(appState.trackingData[foundIndex].id);
-            logDebug(`ポイント選択: Index ${foundIndex}`);
-        } else {
-            // ポイント外をタップした場合は選択を解除
-            setSelectedPoint(null);
-        }
-        drawVideoFrame();
-        
-    } else if (appState.appMode === 'origin') {
-        calibration.origin = { x: vPos.x, y: vPos.y };
-        logDebug(`原点を設定しました: X: ${vPos.x.toFixed(1)}, Y: ${vPos.y.toFixed(1)}`);
-        document.getElementById('info-origin').textContent = `(${vPos.x.toFixed(0)}, ${vPos.y.toFixed(0)})`;
-        updateDataTable();
-        drawVideoFrame();
-        updateGraph();
-        setAppMode('select');
-        
-    } else if (appState.appMode === 'scale') {
-        if (!calibration.scaleTempStart) {
-            calibration.scaleTempStart = { x: vPos.x, y: vPos.y };
-            logDebug("スケール始点を設定。終点をタップしてください。");
-        } else {
-            const start = calibration.scaleTempStart;
-            const end = { x: vPos.x, y: vPos.y };
-            const pixelDistance = Math.hypot(end.x - start.x, end.y - start.y);
-            
-            showInputDialog("スケール設定", `タップした2点間の距離は ${pixelDistance.toFixed(1)} px です。実際の物理的距離を入力してください (cm):`, "100", (val) => {
-                const actualDist = parseFloat(val);
-                if (!isNaN(actualDist) && actualDist > 0) {
-                    calibration.scaleRatio = actualDist / pixelDistance;
-                    calibration.scaleStart = start;
-                    calibration.scaleEnd = end;
-                    calibration.scaleActual = actualDist;
-                    logDebug(`スケール設定完了: ${calibration.scaleRatio.toFixed(4)} cm/px (実寸: ${actualDist} cm)`);
-                    document.getElementById('info-scale').textContent = `${calibration.scaleRatio.toFixed(3)} cm/px`;
-                    updateDataTable();
-                    drawVideoFrame();
-                    updateGraph();
-                } else {
-                    logDebug("無効な距離が入力されました。");
-                }
-                calibration.scaleTempStart = null;
-                setAppMode('select');
-            });
-        }
+// --- 十字（画面中央）が指す動画座標を取得 ---
+function getCrosshairVideoCoord() {
+    return canvasToVideo(appState.canvas.width / 2, appState.canvas.height / 2);
+}
+
+// --- 「確定」ボタン: 十字位置を現在の保留アクションに応じて確定する ---
+function confirmAtCrosshair() {
+    if (!appState.videoElement.src || appState.videoElement.readyState < 2) {
+        logDebug("動画が読み込まれていません。");
+        return;
     }
+    const vPos = getCrosshairVideoCoord();
+
+    if (appState.pendingCapture === 'origin') {
+        captureOrigin(vPos);
+    } else if (appState.pendingCapture === 'scale') {
+        captureScalePoint(vPos);
+    } else {
+        captureTrackPoint(vPos);
+    }
+}
+
+// 通常: トラックポイントを現フレームに登録/上書きし、ステップ幅ぶん自動コマ送り
+function captureTrackPoint(vPos) {
+    pushHistory();
+    const existingIndex = appState.trackingData.findIndex(p => p.frame === appState.currentFrame && p.objectId === appState.activeObjectId);
+    const newPoint = {
+        id: Date.now(),
+        frame: appState.currentFrame,
+        time: appState.currentFrame / appState.videoFps,
+        x: vPos.x,
+        y: vPos.y,
+        objectId: appState.activeObjectId
+    };
+
+    if (existingIndex >= 0) {
+        appState.trackingData[existingIndex] = newPoint;
+    } else {
+        appState.trackingData.push(newPoint);
+    }
+
+    appState.targetColor = sampleColor(vPos.x, vPos.y);
+    if (appState.targetColor) {
+        logDebug(`色をサンプリングしました: RGB(${appState.targetColor.r}, ${appState.targetColor.g}, ${appState.targetColor.b})`);
+    }
+
+    logDebug(`ポイント登録: Frame ${appState.currentFrame}, X: ${vPos.x.toFixed(1)}, Y: ${vPos.y.toFixed(1)}`);
+    persistState();
+    updateDataTable();
+    drawVideoFrame();
+    updateGraph();
+
+    stepFrame(appState.trackingStepSize);
+}
+
+function captureOrigin(vPos) {
+    appState.calibration.origin = { x: vPos.x, y: vPos.y };
+    logDebug(`原点を設定しました: X: ${vPos.x.toFixed(1)}, Y: ${vPos.y.toFixed(1)}`);
+    document.getElementById('info-origin').textContent = `(${vPos.x.toFixed(0)}, ${vPos.y.toFixed(0)})`;
+    setPendingCapture(null);
+    persistState();
+    updateDataTable();
+    drawVideoFrame();
+    updateGraph();
+}
+
+function captureScalePoint(vPos) {
+    const cal = appState.calibration;
+    if (!cal.scaleTempStart) {
+        cal.scaleTempStart = { x: vPos.x, y: vPos.y };
+        logDebug("スケール始点を設定。十字を終点に合わせて、もう一度「確定」してください。");
+        updateActionHint();
+        drawVideoFrame();
+        return;
+    }
+    const start = cal.scaleTempStart;
+    const end = { x: vPos.x, y: vPos.y };
+    const pixelDistance = Math.hypot(end.x - start.x, end.y - start.y);
+
+    showInputDialog("スケール設定", `2点間の距離は ${pixelDistance.toFixed(1)} px です。実際の物理的距離を入力してください (cm):`, "100", (val) => {
+        const actualDist = parseFloat(val);
+        if (!isNaN(actualDist) && actualDist > 0) {
+            cal.scaleRatio = actualDist / pixelDistance;
+            cal.scaleStart = start;
+            cal.scaleEnd = end;
+            cal.scaleActual = actualDist;
+            logDebug(`スケール設定完了: ${cal.scaleRatio.toFixed(4)} cm/px (実寸: ${actualDist} cm)`);
+            document.getElementById('info-scale').textContent = `${cal.scaleRatio.toFixed(3)} cm/px`;
+            persistState();
+            updateDataTable();
+            updateGraph();
+        } else {
+            logDebug("無効な距離が入力されました。");
+        }
+        cal.scaleTempStart = null;
+        setPendingCapture(null);
+        drawVideoFrame();
+    });
 }
 
 // 選択ポイント状態の切り替え
@@ -711,9 +908,11 @@ function setupDeletionEvent() {
     if (btnDel) {
         btnDel.addEventListener('click', () => {
             if (appState.selectedPointId !== null) {
+                pushHistory();
                 appState.trackingData = appState.trackingData.filter(p => p.id !== appState.selectedPointId);
                 logDebug(`選択ポイント削除: ID ${appState.selectedPointId}`);
                 setSelectedPoint(null);
+                persistState();
                 updateDataTable();
                 drawVideoFrame();
                 updateGraph();
@@ -852,6 +1051,7 @@ function trackColorStep() {
                     appState.trackingData.push(newPoint);
                 }
                 
+                persistState();
                 updateDataTable();
                 drawVideoFrame();
                 updateGraph();
@@ -1079,10 +1279,12 @@ function updateDataTable() {
 }
 
 function deletePoint(id) {
+    pushHistory();
     appState.trackingData = appState.trackingData.filter(p => p.id !== id);
     if (appState.selectedPointId === id) {
         setSelectedPoint(null);
     }
+    persistState();
     updateDataTable();
     drawVideoFrame();
     updateGraph();
@@ -1389,11 +1591,13 @@ window.videoToCanvas = videoToCanvas;
 window.videoToLocalCanvas = videoToLocalCanvas;
 window.seekToFrame = seekToFrame;
 window.stepFrame = stepFrame;
-window.setAppMode = setAppMode;
-window.handleCanvasClick = handleCanvasClick;
+window.setPendingCapture = setPendingCapture;
+window.confirmAtCrosshair = confirmAtCrosshair;
+window.getCrosshairVideoCoord = getCrosshairVideoCoord;
 window.resetZoom = resetZoom;
 window.updateGraph = updateGraph;
 window.deletePoint = deletePoint;
+window.undo = undo;
 
 if (typeof module !== 'undefined') {
     module.exports = {

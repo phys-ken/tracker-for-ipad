@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>iPad Video Tracker</title>
     <!-- Google Fonts & Material Icons -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -17,7 +17,7 @@
         <header class="app-header">
             <div class="logo-area">
                 <span class="material-icons-round brand-icon">analytics</span>
-                <h1>Physics Tracker <span class="badge">iPad Edition</span></h1>
+                <h1>動画解析トラッカー <span class="badge">iPad版</span></h1>
             </div>
             <div class="header-actions">
                 <label for="video-upload" class="btn btn-primary">
@@ -25,8 +25,21 @@
                     動画を選択
                 </label>
                 <input type="file" id="video-upload" accept="video/*" style="display: none;">
+                <button class="btn btn-secondary" id="btn-load-sample">
+                    <span class="material-icons-round">smart_display</span>
+                    サンプルで試す
+                </button>
             </div>
         </header>
+
+        <!-- 手順ガイド（常設） -->
+        <nav class="step-guide" id="step-guide">
+            <span class="step">① 動画</span>
+            <span class="step">② スケール</span>
+            <span class="step">③ 原点</span>
+            <span class="step">④ トラッキング</span>
+            <span class="step">⑤ 出力</span>
+        </nav>
 
         <!-- Main Workspace -->
         <div class="workspace">
@@ -36,7 +49,7 @@
                     <canvas id="tracker-canvas"></canvas>
                     <div class="hint-overlay" id="hint-overlay">
                         <span class="material-icons-round">cloud_upload</span>
-                        <p>動画を読み込んで分析を開始してください</p>
+                        <p>「動画を選択」または「サンプルで試す」で開始してください</p>
                     </div>
                     <!-- Zoom/Pan controls on canvas -->
                     <div class="canvas-floating-controls">
@@ -46,34 +59,18 @@
                     </div>
                 </div>
 
-                <!-- Video Controls Bar -->
+                <!-- Playback bar (slim): 再生・シーク・情報 -->
                 <div class="video-controls-bar">
-                    <div class="playback-controls">
-                        <button class="btn-icon" id="btn-prev-10" title="10フレーム戻る">
-                            <span class="material-icons-round">replay_10</span>
-                        </button>
-                        <button class="btn-icon" id="btn-prev-1" title="1フレーム戻る">
-                            <span class="material-icons-round">chevron_left</span>
-                        </button>
-                        <button class="btn-icon btn-accent" id="btn-play-pause" title="再生 / 一時停止">
-                            <span class="material-icons-round">play_arrow</span>
-                        </button>
-                        <button class="btn-icon" id="btn-next-1" title="1フレーム進む">
-                            <span class="material-icons-round">chevron_right</span>
-                        </button>
-                        <button class="btn-icon" id="btn-next-10" title="10フレーム進む">
-                            <span class="material-icons-round">forward_10</span>
-                        </button>
-                    </div>
-
+                    <button class="btn-icon btn-accent" id="btn-play-pause" title="再生 / 一時停止">
+                        <span class="material-icons-round">play_arrow</span>
+                    </button>
                     <div class="slider-container">
                         <input type="range" id="frame-slider" min="0" max="100" value="0" disabled>
                         <span class="time-display" id="time-display">00:00 / 00:00</span>
                     </div>
-
                     <div class="info-indicators">
                         <div class="indicator">
-                            <span class="label">FRAME:</span>
+                            <span class="label">コマ:</span>
                             <span class="value" id="lbl-frame">0</span>
                         </div>
                         <div class="indicator">
@@ -86,19 +83,9 @@
 
             <!-- Right: Toolbar & Data Panel -->
             <div class="sidebar-section">
-                <!-- Modes Panel -->
+                <!-- Control Panel -->
                 <div class="panel">
                     <h2>コントロール</h2>
-                    <div class="mode-toggle-group">
-                        <button class="btn-mode active" id="mode-select">
-                            <span class="material-icons-round">ads_click</span>
-                            <span>微調整</span>
-                        </button>
-                        <button class="btn-mode" id="mode-track">
-                            <span class="material-icons-round">add_circle_outline</span>
-                            <span>トラック</span>
-                        </button>
-                    </div>
                     <div class="control-settings-row">
                         <div class="setting-item">
                             <label for="object-id-select">物体ID:</label>
@@ -216,6 +203,29 @@
                         </table>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- 下部固定アクションバー（親指で届く核操作） -->
+        <div class="action-bar">
+            <div class="action-hint" id="action-hint">十字を対象に合わせて「確定」</div>
+            <div class="action-buttons">
+                <button class="btn-icon btn-jog" id="btn-undo" title="元に戻す" disabled>
+                    <span class="material-icons-round">undo</span>
+                </button>
+                <button class="btn-icon btn-jog" id="btn-prev-1" title="1コマ戻る">
+                    <span class="material-icons-round">chevron_left</span>
+                </button>
+                <button class="btn-confirm" id="btn-confirm">
+                    <span class="material-icons-round">add_location_alt</span>
+                    <span class="confirm-label">確定（点を打つ）</span>
+                </button>
+                <button class="btn-icon btn-jog" id="btn-next-1" title="1コマ進む">
+                    <span class="material-icons-round">chevron_right</span>
+                </button>
+                <button class="btn-icon btn-jog" id="btn-next-10" title="10コマ進む">
+                    <span class="material-icons-round">forward_10</span>
+                </button>
             </div>
         </div>
 

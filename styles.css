@@ -615,6 +615,117 @@ body {
     border-color: var(--accent-blue);
 }
 
+/* 手順ガイド（常設の小さなステップ表示） */
+.step-guide {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-main);
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+.step-guide .step {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    padding: 3px 10px;
+    background: #f1f3f4;
+    border-radius: 999px;
+    flex: 0 0 auto;
+}
+
+.step-guide .step.active {
+    background: #e8f0fe;
+    color: var(--accent-blue);
+    font-weight: 600;
+}
+
+/* 下部固定アクションバー（親指で届く核操作） */
+.action-bar {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-main);
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.action-hint {
+    text-align: center;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.action-buttons {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.btn-jog {
+    width: 52px;
+    height: 52px;
+    border-radius: 8px;
+}
+
+.btn-jog .material-icons-round {
+    font-size: 1.6rem;
+}
+
+.btn-jog:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.btn-confirm {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 240px;
+    min-height: 52px;
+    padding: 10px 24px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent-green);
+    color: #ffffff;
+    font-family: var(--font-family);
+    font-size: 1.05rem;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(24, 128, 56, 0.3);
+    transition: background-color 0.12s, transform 0.05s;
+}
+
+.btn-confirm .material-icons-round {
+    font-size: 1.5rem;
+}
+
+.btn-confirm:hover {
+    background: #146c2e;
+}
+
+.btn-confirm:active {
+    transform: translateY(1px);
+}
+
+/* キャリブレーション保留中はボタンを青で強調 */
+.btn-secondary.active {
+    background: #e8f0fe;
+    color: var(--accent-blue);
+    border-color: #1a73e8;
+    font-weight: 600;
+}
+
 /* iPad Responsive Adjustments */
 @media (max-width: 1024px) {
     .workspace {
