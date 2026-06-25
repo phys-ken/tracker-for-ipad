@@ -353,6 +353,60 @@ body {
 
 .setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
+/* 物体選択（色ボタン） */
+.object-selector { display: flex; gap: 6px; margin-top: 4px; }
+.obj-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    font-family: var(--font-sans);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.obj-btn .obj-swatch {
+    width: 12px; height: 12px; border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4) inset;
+}
+.obj-btn:hover { border-color: #3a434f; color: var(--text); }
+.obj-btn.active {
+    color: var(--text);
+    border-color: var(--trace);
+    background: var(--trace-dim);
+}
+
+/* 折りたたみパネル（オートトラックを補助に格下げ） */
+details.panel-collapsible { gap: 0; }
+details.panel-collapsible > summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+}
+details.panel-collapsible > summary::-webkit-details-marker { display: none; }
+details.panel-collapsible > summary h2 {
+    border: none;
+    padding: 0;
+    margin: 0;
+    width: 100%;
+}
+details.panel-collapsible > summary h2::after {
+    content: "expand_more";
+    font-family: "Material Icons Round";
+    margin-left: auto;
+    color: var(--muted);
+    transition: transform 0.15s;
+}
+details.panel-collapsible[open] > summary h2::after { transform: rotate(180deg); }
+
 .calibration-info {
     margin-top: 2px;
     background: var(--panel-2);

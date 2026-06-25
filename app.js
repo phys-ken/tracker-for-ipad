@@ -170,6 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupCanvasTouch();
     setupModeButtons();
     setupSettingsInputs();
+    setupObjectButtons();
     setupExport();
     setupAutoTrackerUI();
     setupGraphEvents();
@@ -191,6 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateUndoButton();
     updateActionHint();
     updateStepGuide();
+    updateObjectButtons();
     refreshFpsUI();
 
     // 空スタート: 動画はユーザーが「動画を選択」または「サンプルで試す」で読み込む
@@ -949,21 +951,40 @@ function setupModeButtons() {
     if (btnZoomReset) btnZoomReset.addEventListener('click', resetZoom);
 }
 
+// 物体選択（色ボタン）
+function setupObjectButtons() {
+    const selector = document.getElementById('object-selector');
+    if (!selector) return;
+    // 各ボタンのスウォッチ色を COLOR_MAP に合わせる
+    selector.querySelectorAll('.obj-btn').forEach(btn => {
+        const oid = parseInt(btn.dataset.oid);
+        const swatch = btn.querySelector('.obj-swatch');
+        if (swatch) swatch.style.background = COLOR_MAP[(oid - 1) % COLOR_MAP.length];
+        btn.addEventListener('click', () => setActiveObject(oid));
+    });
+    updateObjectButtons();
+}
+
+function setActiveObject(oid) {
+    appState.activeObjectId = Math.max(1, oid);
+    updateObjectButtons();
+    persistState();
+    updateDataTable();
+    drawVideoFrame();
+    updateGraph();
+    logDebug(`物体${appState.activeObjectId}を選択`);
+}
+
+function updateObjectButtons() {
+    document.querySelectorAll('#object-selector .obj-btn').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.oid) === appState.activeObjectId);
+    });
+}
+
 // 設定入力欄のイベント設定
 function setupSettingsInputs() {
-    const objIdInput = document.getElementById('object-id-select');
     const stepInput = document.getElementById('step-size-select');
-    
-    if (objIdInput) {
-        objIdInput.addEventListener('change', (e) => {
-            appState.activeObjectId = Math.max(1, parseInt(e.target.value) || 1);
-            updateDataTable();
-            drawVideoFrame();
-            updateGraph();
-            logDebug(`アクティブ物体ID: ${appState.activeObjectId}`);
-        });
-    }
-    
+
     if (stepInput) {
         stepInput.addEventListener('change', (e) => {
             appState.trackingStepSize = Math.max(1, parseInt(e.target.value) || 1);
@@ -1407,7 +1428,12 @@ function drawCalibrationMarkers() {
 function updateDataTable() {
     const tableBody = document.querySelector('#data-table tbody');
     if (!tableBody) return;
-    
+
+    // ヘッダの単位をスケール設定に合わせて更新
+    const unit = appState.calibration.scaleRatio ? 'cm' : 'px';
+    const ths = document.querySelectorAll('#data-table thead th');
+    if (ths.length >= 3) { ths[1].textContent = `x (${unit})`; ths[2].textContent = `y (${unit})`; }
+
     tableBody.innerHTML = '';
     
     const filteredData = appState.trackingData

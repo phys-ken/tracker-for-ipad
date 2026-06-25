@@ -91,11 +91,15 @@
                 <!-- Control Panel -->
                 <div class="panel">
                     <h2>コントロール</h2>
-                    <div class="control-settings-row">
-                        <div class="setting-item">
-                            <label for="object-id-select">物体ID:</label>
-                            <input type="number" id="object-id-select" min="1" max="10" value="1">
+                    <div class="setting-item" style="text-transform:none; letter-spacing:0;">
+                        <label>追跡する物体:</label>
+                        <div class="object-selector" id="object-selector">
+                            <button class="obj-btn active" data-oid="1"><span class="obj-swatch"></span>物体1</button>
+                            <button class="obj-btn" data-oid="2"><span class="obj-swatch"></span>物体2</button>
+                            <button class="obj-btn" data-oid="3"><span class="obj-swatch"></span>物体3</button>
                         </div>
+                    </div>
+                    <div class="control-settings-row">
                         <div class="setting-item">
                             <label for="step-size-select">ステップ幅:</label>
                             <input type="number" id="step-size-select" min="1" max="30" value="1">
@@ -138,10 +142,10 @@
                     </div>
                 </div>
 
-                <!-- Auto Tracker Panel -->
-                <div class="panel">
-                    <h2>オートトラック (自動色追跡)</h2>
-                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                <!-- Auto Tracker Panel (補助機能・折りたたみ) -->
+                <details class="panel panel-collapsible">
+                    <summary><h2>オートトラック (自動色追跡・補助)</h2></summary>
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
                         <div style="display: flex; gap: 8px;">
                             <button class="btn btn-secondary" id="btn-auto-track-step" style="flex: 1; padding: 8px 12px; font-size: 0.85rem;">
                                 <span class="material-icons-round" style="font-size: 1.1rem; vertical-align: middle;">play_circle_outline</span>
@@ -168,7 +172,7 @@
                             </div>
                         </div>
                     </div>
-                </div>
+                </details>
 
                 <!-- Realtime Graph Panel -->
                 <div class="panel" style="min-height: 200px;">
