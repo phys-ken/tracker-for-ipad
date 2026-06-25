@@ -478,7 +478,8 @@ function drawCrosshair() {
     const cx = appState.canvas.width / 2;
     const cy = appState.canvas.height / 2;
     const isCalib = appState.pendingCapture !== null;
-    const color = isCalib ? '#1a73e8' : '#ff3b30';
+    // 照準 = シグナル・アンバー（ストロボ発光）。校正中は校正系のシアン。
+    const color = isCalib ? '#5AA9E6' : '#FFB627';
 
     ctx.save();
     ctx.lineWidth = 1.5;
@@ -1174,7 +1175,7 @@ function drawCalibrationMarkers() {
         appState.ctx.stroke();
         
         appState.ctx.fillStyle = '#d93025';
-        appState.ctx.font = `bold ${11 / scale}px var(--font-family)`;
+        appState.ctx.font = `bold ${11 / scale}px IBM Plex Sans JP`;
         appState.ctx.fillText("x", localO.x + 45 / scale, localO.y + 4 / scale);
         appState.ctx.fillText("y", localO.x - 4 / scale, localO.y - 45 / scale);
     }
@@ -1187,7 +1188,7 @@ function drawCalibrationMarkers() {
         appState.ctx.beginPath();
         appState.ctx.moveTo(localS.x, localS.y);
         appState.ctx.lineTo(localE.x, localE.y);
-        appState.ctx.strokeStyle = '#1a73e8';
+        appState.ctx.strokeStyle = '#5AA9E6';
         appState.ctx.lineWidth = 2.0 / scale;
         appState.ctx.stroke();
         
@@ -1204,8 +1205,8 @@ function drawCalibrationMarkers() {
         drawEndBar(localS);
         drawEndBar(localE);
         
-        appState.ctx.fillStyle = '#1a73e8';
-        appState.ctx.font = `${11 / scale}px var(--font-family)`;
+        appState.ctx.fillStyle = '#5AA9E6';
+        appState.ctx.font = `${11 / scale}px IBM Plex Sans JP`;
         const midX = (localS.x + localE.x) / 2;
         const midY = (localS.y + localE.y) / 2;
         appState.ctx.fillText(`${appState.calibration.scaleActual} cm`, midX + 10 / scale, midY - 10 / scale);
@@ -1213,7 +1214,7 @@ function drawCalibrationMarkers() {
         const localTemp = videoToLocalCanvas(appState.calibration.scaleTempStart.x, appState.calibration.scaleTempStart.y);
         appState.ctx.beginPath();
         appState.ctx.arc(localTemp.x, localTemp.y, 5 / scale, 0, Math.PI * 2);
-        appState.ctx.fillStyle = '#1a73e8';
+        appState.ctx.fillStyle = '#5AA9E6';
         appState.ctx.fill();
     }
 }
@@ -1320,8 +1321,8 @@ function updateGraph() {
         .sort((a, b) => a.frame - b.frame);
         
     if (data.length === 0) {
-        gCtx.fillStyle = 'var(--text-muted)';
-        gCtx.font = '11px var(--font-family)';
+        gCtx.fillStyle = '#7A828E';
+        gCtx.font = '11px IBM Plex Sans JP';
         gCtx.textAlign = 'center';
         gCtx.textBaseline = 'middle';
         gCtx.fillText("測定が開始されると自動で描画されます", graphCanvas.width / 2, graphCanvas.height / 2);
@@ -1390,7 +1391,7 @@ function updateGraph() {
     const toCanvasY = (val) => padT + plotH - ((val - minY) / (maxY - minY)) * plotH;
     
     // グリッド背景線
-    gCtx.strokeStyle = '#e9ecef';
+    gCtx.strokeStyle = '#222933';
     gCtx.lineWidth = 1;
     
     // X軸の補助線と目盛りラベル
@@ -1405,8 +1406,8 @@ function updateGraph() {
         gCtx.lineTo(cx, padT + plotH);
         gCtx.stroke();
         
-        gCtx.fillStyle = 'var(--text-muted)';
-        gCtx.font = '8px var(--font-mono)';
+        gCtx.fillStyle = '#7A828E';
+        gCtx.font = '8px IBM Plex Mono';
         gCtx.textAlign = 'center';
         gCtx.fillText(val.toFixed(2), cx, padT + plotH + 11);
     }
@@ -1423,14 +1424,14 @@ function updateGraph() {
         gCtx.lineTo(padL + plotW, cy);
         gCtx.stroke();
         
-        gCtx.fillStyle = 'var(--text-muted)';
-        gCtx.font = '8px var(--font-mono)';
+        gCtx.fillStyle = '#7A828E';
+        gCtx.font = '8px IBM Plex Mono';
         gCtx.textAlign = 'right';
         gCtx.fillText(val.toFixed(1), padL - 5, cy + 3);
     }
     
-    // 黒い主軸線
-    gCtx.strokeStyle = '#495057';
+    // 主軸線
+    gCtx.strokeStyle = '#3A434F';
     gCtx.lineWidth = 1.2;
     gCtx.beginPath();
     gCtx.moveTo(padL, padT);
@@ -1439,8 +1440,8 @@ function updateGraph() {
     gCtx.stroke();
     
     // 軸名ラベルの描画
-    gCtx.fillStyle = 'var(--text-muted)';
-    gCtx.font = '8px var(--font-family)';
+    gCtx.fillStyle = '#9AA3AE';
+    gCtx.font = '8px IBM Plex Sans JP';
     gCtx.textAlign = 'right';
     gCtx.fillText(labelX, graphCanvas.width - 4, graphCanvas.height - 4);
     gCtx.textAlign = 'left';
@@ -1512,7 +1513,7 @@ function setupExport() {
         });
         
         const dialogText = `
-            <textarea style="width:100%; height:130px; font-family:var(--font-mono); background:#ffffff; color:#212529; border:1px solid var(--border-color); border-radius:4px; padding:8px; font-size:0.8rem;" readonly>${csvContent}</textarea>
+            <textarea style="width:100%; height:130px; font-family:'IBM Plex Mono',monospace; background:#0F1216; color:#E6EAEF; border:1px solid #2B333D; border-radius:5px; padding:8px; font-size:0.8rem;" readonly>${csvContent}</textarea>
             <div style="margin-top:10px; display:flex; gap:8px;">
                 <button class="btn btn-secondary" id="btn-copy-tsv" style="flex:1; font-size:0.8rem;">コピー</button>
                 <button class="btn btn-primary" id="btn-download-tsv" style="flex:1; font-size:0.8rem;">ファイル保存</button>

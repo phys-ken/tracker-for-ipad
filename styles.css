@@ -1,23 +1,31 @@
+/* =====================================================================
+   動画解析トラッカー — "計器 / ストロボ" ビジュアル
+   暗室グラファイトの計測器。シグナル・アンバーを唯一の発光色に集中。
+   IBM Plex (工学のための書体) + モノスペースの計器読み出し。
+   ===================================================================== */
 :root {
-    /* 白ベースのシンプルで一般的なカラーパレット */
-    --bg-base: #f8f9fa;
-    --bg-panel: #ffffff;
-    --border-color: #dee2e6;
-    --border-hover: #ced4da;
-    
-    --accent-blue: #1a73e8; /* Googleライクなクリーンなブルー */
-    --accent-blue-hover: #1557b0;
-    --accent-red: #d93025;
-    --accent-red-hover: #b31412;
-    --accent-green: #188038;
-    
-    --text-main: #212529;
-    --text-muted: #5f6368;
-    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
-    
-    --shadow-main: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
-    --border-radius: 6px;
+    --ink:        #0F1216;  /* 暗室グラファイト（最背面） */
+    --panel:      #171B21;  /* 計器パネル面 */
+    --panel-2:    #1E242C;  /* 一段持ち上げたコントロール面 */
+    --line:       #2B333D;  /* ヘアライン罫 = 方眼 */
+    --line-soft:  #222933;
+
+    --text:       #E6EAEF;  /* 主読み出し */
+    --muted:      #8A95A3;  /* 副情報 */
+    --faint:      #5A636F;  /* キャプション・目盛 */
+
+    --trace:      #FFB627;  /* シグナル・アンバー: 主操作 / 現ステップ / 照準 */
+    --trace-hi:   #FFC857;
+    --trace-dim:  rgba(255, 182, 39, 0.14);
+    --cyan:       #5AA9E6;  /* 校正 / 副アクセント */
+    --red:        #FF5A52;  /* 破壊操作・警告 */
+
+    --font-sans: "IBM Plex Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", SFMono-Regular, Consolas, Menlo, monospace;
+
+    --radius: 8px;
+    --radius-sm: 5px;
+    --shadow: 0 1px 0 rgba(255,255,255,0.02) inset, 0 6px 18px rgba(0,0,0,0.35);
 }
 
 * {
@@ -27,16 +35,24 @@
     -webkit-tap-highlight-color: transparent;
 }
 
+html { color-scheme: dark; }
+
 body {
-    background-color: var(--bg-base);
-    color: var(--text-main);
-    font-family: var(--font-family);
+    background-color: var(--ink);
+    /* 計器スクリーンの極薄方眼 */
+    background-image:
+        linear-gradient(var(--line-soft) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+    background-size: 28px 28px, 28px 28px;
+    background-position: -1px -1px;
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-feature-settings: "palt" 1;
     overflow: hidden;
     height: 100vh;
     width: 100vw;
 }
 
-/* App Container Layout */
 .app-container {
     display: flex;
     flex-direction: column;
@@ -45,47 +61,97 @@ body {
     gap: 12px;
 }
 
-/* Header Design (フラットでシンプルに) */
+/* ---- Header: 計器の銘板 ------------------------------------------- */
 .app-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 16px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius);
-    box-shadow: var(--shadow-main);
+    padding: 12px 18px;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), transparent),
+        var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
 }
 
-.logo-area {
+.logo-area { display: flex; align-items: center; gap: 12px; }
+
+.brand-icon {
+    font-size: 1.5rem;
+    color: var(--ink);
+    background: var(--trace);
+    border-radius: 6px;
+    padding: 5px;
+    box-shadow: 0 0 0 1px rgba(255,182,39,0.4), 0 0 18px var(--trace-dim);
+}
+
+.app-header h1 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: var(--text);
     display: flex;
     align-items: center;
     gap: 10px;
 }
 
-.brand-icon {
-    font-size: 1.8rem;
-    color: var(--accent-blue);
-}
-
-.app-header h1 {
-    font-size: 1.15rem;
-    font-weight: 600;
-    color: var(--text-main);
-}
-
 .badge {
-    font-size: 0.7rem;
-    padding: 2px 6px;
-    background: #e8f0fe;
-    color: var(--accent-blue);
-    border: 1px solid #d2e3fc;
-    border-radius: 4px;
-    margin-left: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
     font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    background: transparent;
+    color: var(--trace);
+    border: 1px solid rgba(255,182,39,0.4);
+    border-radius: 999px;
 }
 
-/* Main Workspace Layout */
+.header-actions { display: flex; gap: 8px; }
+
+/* ---- 手順ガイド: 本物の作業順 ① → ⑤ ----------------------------- */
+.step-guide {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 7px 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+.step-guide .step {
+    font-size: 0.76rem;
+    font-weight: 500;
+    color: var(--muted);
+    padding: 4px 12px;
+    border-radius: 999px;
+    flex: 0 0 auto;
+    position: relative;
+}
+
+.step-guide .step:not(:last-child)::after {
+    content: "";
+    display: inline-block;
+    width: 14px;
+    height: 1px;
+    background: var(--line);
+    vertical-align: middle;
+    margin-left: 8px;
+}
+
+.step-guide .step.active {
+    color: var(--trace);
+    background: var(--trace-dim);
+    font-weight: 700;
+}
+
+/* ---- Workspace --------------------------------------------------- */
 .workspace {
     display: grid;
     grid-template-columns: 1fr 340px;
@@ -94,7 +160,6 @@ body {
     min-height: 0;
 }
 
-/* Left: Viewer Section */
 .viewer-section {
     display: flex;
     flex-direction: column;
@@ -102,12 +167,18 @@ body {
     min-height: 0;
 }
 
+/* ---- 計器スクリーン (ビューファインダ) --------------------------- */
 .canvas-container {
     position: relative;
     flex: 1;
-    background: #eaeaea;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius);
+    background: #05070A;
+    /* スクリーン内の微細な方眼 */
+    background-image:
+        linear-gradient(rgba(90,169,230,0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(90,169,230,0.05) 1px, transparent 1px);
+    background-size: 24px 24px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
     overflow: hidden;
     display: flex;
     align-items: center;
@@ -119,352 +190,404 @@ body {
     max-width: 100%;
     max-height: 100%;
     touch-action: none;
-    background-color: #000000;
+    background-color: transparent; /* 動画未読込時は計器スクリーンを見せる */
+    z-index: 1;
 }
+
+/* L字コーナーブラケット = スクリーン計器の枠（chrome は cyan）。
+   この製品の記憶に残る印。 */
+.viewfinder { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.viewfinder .vf {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    border: 2px solid var(--cyan);
+    opacity: 0.65;
+}
+.viewfinder .tl { top: 12px; left: 12px; border-right: none; border-bottom: none; }
+.viewfinder .tr { top: 12px; right: 12px; border-left: none; border-bottom: none; }
+.viewfinder .bl { bottom: 12px; left: 12px; border-right: none; border-top: none; }
+.viewfinder .br { bottom: 12px; right: 12px; border-left: none; border-top: none; }
 
 .hint-overlay {
     position: absolute;
+    z-index: 2;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    color: var(--text-muted);
+    gap: 10px;
+    color: var(--muted);
+    text-align: center;
+    padding: 0 24px;
     pointer-events: none;
     transition: opacity 0.3s;
 }
 
-.hint-overlay span {
-    font-size: 3rem;
-    color: var(--text-muted);
-}
+.hint-overlay span { font-size: 2.6rem; color: var(--faint); }
+.hint-overlay p { font-size: 0.9rem; max-width: 280px; line-height: 1.5; }
 
 .canvas-floating-controls {
     position: absolute;
-    top: 12px;
-    right: 12px;
+    top: 14px;
+    right: 46px;
+    z-index: 4;
     display: flex;
     gap: 6px;
 }
 
-/* Video Controls Bar */
+/* ---- 再生バー (計器の操作行) ------------------------------------- */
 .video-controls-bar {
-    background: var(--bg-panel);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius);
-    padding: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 10px 14px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     flex-wrap: wrap;
-    box-shadow: var(--shadow-main);
-}
-
-.playback-controls {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    box-shadow: var(--shadow);
 }
 
 .slider-container {
     flex: 1;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     min-width: 200px;
 }
 
 #frame-slider {
     flex: 1;
-    height: 4px;
+    height: 3px;
     border-radius: 2px;
-    background: #e0e0e0;
+    background: var(--line);
     outline: none;
     -webkit-appearance: none;
-    accent-color: var(--accent-blue);
     cursor: pointer;
 }
+#frame-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--trace);
+    border: 2px solid var(--ink);
+    box-shadow: 0 0 10px var(--trace-dim);
+    cursor: pointer;
+}
+#frame-slider::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--trace); border: 2px solid var(--ink); cursor: pointer;
+}
+#frame-slider:disabled { opacity: 0.4; }
 
 .time-display {
     font-family: var(--font-mono);
     font-size: 0.8rem;
-    color: var(--text-muted);
+    color: var(--muted);
     white-space: nowrap;
+    letter-spacing: 0.02em;
 }
 
-.info-indicators {
-    display: flex;
-    gap: 8px;
-}
+.info-indicators { display: flex; gap: 8px; }
 
 .indicator {
-    background: #f1f3f4;
-    border: 1px solid var(--border-color);
-    padding: 4px 8px;
-    border-radius: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
     font-family: var(--font-mono);
     font-size: 0.8rem;
     display: flex;
-    gap: 4px;
+    gap: 6px;
+    align-items: baseline;
 }
 
 .indicator .label {
-    color: var(--text-muted);
+    color: var(--faint);
+    font-size: 0.62rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
 }
+.indicator .value { color: var(--trace); font-weight: 600; }
 
-.indicator .value {
-    color: var(--text-main);
-    font-weight: bold;
-}
-
-/* Right: Sidebar Panel Setup */
+/* ---- サイドバー --------------------------------------------------- */
 .sidebar-section {
     display: flex;
     flex-direction: column;
     gap: 12px;
     min-height: 0;
+    overflow-y: auto;
 }
 
 .panel {
-    background: var(--bg-panel);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius);
-    padding: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    box-shadow: var(--shadow-main);
+    gap: 10px;
+    box-shadow: var(--shadow);
 }
 
+/* セクション見出し = 計器のラベル（左に小さなアンバーの目印） */
 .panel h2 {
-    font-size: 0.85rem;
+    font-size: 0.78rem;
     font-weight: 700;
-    color: var(--text-muted);
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 6px;
+    color: var(--text);
+    letter-spacing: 0.02em;
+    padding-bottom: 9px;
     margin-bottom: 2px;
-}
-
-/* Mode toggles (シンプルなフラットボタンのグループ) */
-.mode-toggle-group {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-    background: #f1f3f4;
-    padding: 3px;
-    border-radius: 4px;
-}
-
-.btn-mode {
-    border: none;
-    background: transparent;
-    color: var(--text-muted);
-    font-family: var(--font-family);
-    padding: 8px;
-    font-size: 0.85rem;
-    font-weight: 500;
-    border-radius: 3px;
+    border-bottom: 1px solid var(--line);
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 6px;
-    cursor: pointer;
-    transition: background-color 0.15s, color 0.15s;
+    gap: 8px;
+}
+.panel h2::before {
+    content: "";
+    width: 3px;
+    height: 13px;
+    background: var(--cyan);
+    border-radius: 1px;
 }
 
-.btn-mode.active {
-    background: #ffffff;
-    color: var(--accent-blue);
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-}
-
-.setup-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-}
+.setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
 .calibration-info {
     margin-top: 2px;
-    background: #f1f3f4;
-    padding: 6px 10px;
-    border-radius: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 5px;
     font-size: 0.8rem;
-    color: var(--text-muted);
+    color: var(--muted);
 }
 
-.cal-row {
-    display: flex;
-    justify-content: space-between;
+.cal-row { display: flex; justify-content: space-between; align-items: baseline; }
+.cal-row span:first-child {
+    font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint);
 }
+.cal-row span:last-child { font-family: var(--font-mono); color: var(--cyan); font-weight: 500; }
 
-.cal-row span:last-child {
-    font-family: var(--font-mono);
-    color: var(--text-main);
-    font-weight: 500;
-}
-
-/* Data Panel & Table */
-.data-panel {
-    flex: 1;
-    min-height: 0;
-}
+/* ---- データパネル & テーブル ------------------------------------- */
+.data-panel { flex: 1; min-height: 160px; }
 
 .panel-header-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 6px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 9px;
 }
-
-.panel-header-row h2 {
-    border: none;
-    padding: 0;
-    margin: 0;
-}
+.panel-header-row h2 { border: none; padding: 0; margin: 0; }
 
 .table-container {
     flex: 1;
     overflow-y: auto;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    background: #ffffff;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--ink);
 }
 
-.data-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.8rem;
-}
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 
 .data-table th, .data-table td {
-    padding: 6px 10px;
-    text-align: left;
-    border-bottom: 1px solid var(--border-color);
+    padding: 7px 10px;
+    text-align: right;
+    border-bottom: 1px solid var(--line-soft);
 }
+.data-table th:last-child, .data-table td:last-child { text-align: center; }
 
 .data-table th {
-    background: #f1f3f4;
-    color: var(--text-muted);
-    font-weight: 600;
+    background: var(--panel-2);
+    color: var(--faint);
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     position: sticky;
     top: 0;
     z-index: 10;
 }
 
-.data-table tr:last-child td {
-    border-bottom: none;
-}
-
-.data-table td {
-    font-family: var(--font-mono);
-    vertical-align: middle;
-}
+.data-table tr:last-child td { border-bottom: none; }
+.data-table td { font-family: var(--font-mono); color: var(--text); vertical-align: middle; }
+.data-table tbody tr:hover { background: var(--panel-2); cursor: pointer; }
 
 .empty-row td {
-    text-align: center;
-    color: var(--text-muted);
-    padding: 20px;
-    font-family: var(--font-family);
+    text-align: center !important;
+    color: var(--faint);
+    padding: 24px;
+    font-family: var(--font-sans);
 }
 
-/* Buttons Design (すっきりとしたフラットUI) */
+/* ---- ボタン ------------------------------------------------------- */
 .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    font-family: var(--font-family);
+    font-family: var(--font-sans);
     font-size: 0.85rem;
-    font-weight: 500;
-    padding: 8px 14px;
-    border-radius: var(--border-radius);
+    font-weight: 600;
+    padding: 9px 15px;
+    border-radius: var(--radius-sm);
     border: 1px solid transparent;
     cursor: pointer;
-    transition: background-color 0.15s, border-color 0.15s;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
 
-.btn-small {
-    padding: 4px 10px;
-    font-size: 0.78rem;
-    border-radius: 4px;
-}
+.btn-small { padding: 5px 11px; font-size: 0.76rem; }
 
 .btn-primary {
-    background: var(--accent-blue);
-    color: #ffffff;
+    background: var(--trace);
+    color: var(--ink);
+    box-shadow: 0 0 18px var(--trace-dim);
 }
-
-.btn-primary:hover {
-    background: var(--accent-blue-hover);
-}
+.btn-primary:hover { background: var(--trace-hi); }
 
 .btn-secondary {
-    background: #ffffff;
-    color: var(--text-main);
-    border: 1px solid var(--border-color);
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--line);
 }
-
-.btn-secondary:hover {
-    background: #f1f3f4;
-    border-color: var(--border-hover);
-}
+.btn-secondary:hover { background: #252c35; border-color: #3a434f; }
 
 .btn-danger-small {
-    background: #fce8e6;
-    color: var(--accent-red);
-    border: 1px solid #fad2cf;
-    padding: 2px 6px;
+    background: transparent;
+    color: var(--red);
+    border: 1px solid rgba(255,90,82,0.35);
+    padding: 3px 9px;
     border-radius: 4px;
-    font-family: var(--font-family);
+    font-family: var(--font-sans);
     cursor: pointer;
     font-size: 0.72rem;
-    transition: all 0.1s;
+    transition: all 0.12s;
 }
-
-.btn-danger-small:hover {
-    background: var(--accent-red);
-    color: #ffffff;
-    border-color: var(--accent-red);
-}
+.btn-danger-small:hover { background: var(--red); color: var(--ink); border-color: var(--red); }
 
 .btn-icon {
-    width: 38px;
-    height: 38px;
-    border-radius: 4px;
-    background: #ffffff;
-    border: 1px solid var(--border-color);
-    color: var(--text-main);
+    width: 40px; height: 40px;
+    border-radius: var(--radius-sm);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--text);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: background-color 0.1s;
+    transition: background-color 0.12s, border-color 0.12s;
 }
+.btn-icon:hover { background: #252c35; border-color: #3a434f; }
 
-.btn-icon:hover {
-    background: #f1f3f4;
-}
+/* 再生ボタンは中立、グリフだけアンバーで "go" を示す */
+.btn-play .material-icons-round { color: var(--trace); }
 
 .btn-accent {
-    background: var(--accent-blue);
-    color: #ffffff;
+    background: var(--trace);
+    color: var(--ink);
     border: none;
+    box-shadow: 0 0 18px var(--trace-dim);
+}
+.btn-accent:hover { background: var(--trace-hi); }
+
+/* キャリブレーション保留中の強調（青 = 校正系） */
+.btn-secondary.active {
+    background: rgba(90,169,230,0.14);
+    color: var(--cyan);
+    border-color: var(--cyan);
 }
 
-.btn-accent:hover {
-    background: var(--accent-blue-hover);
+/* ---- 下部固定アクションバー: 大胆さを集中させる一点 -------------- */
+.action-bar {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.02), transparent),
+        var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 9px 14px 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    flex: 0 0 auto;
 }
 
-/* Dialog Design */
+.action-hint {
+    text-align: center;
+    font-size: 0.78rem;
+    color: var(--muted);
+    letter-spacing: 0.01em;
+}
+
+.action-buttons { display: flex; align-items: center; justify-content: center; gap: 10px; }
+
+.btn-jog { width: 54px; height: 54px; border-radius: var(--radius); }
+.btn-jog .material-icons-round { font-size: 1.6rem; }
+.btn-jog:disabled { opacity: 0.35; cursor: default; }
+
+.btn-confirm {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-width: 260px;
+    min-height: 54px;
+    padding: 10px 28px;
+    border: none;
+    border-radius: var(--radius);
+    background: var(--trace);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 1.08rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    box-shadow: 0 0 0 1px rgba(255,182,39,0.5), 0 0 28px var(--trace-dim), 0 6px 16px rgba(0,0,0,0.4);
+    transition: background-color 0.12s, transform 0.05s, box-shadow 0.2s;
+}
+.btn-confirm .material-icons-round { font-size: 1.5rem; }
+.btn-confirm:hover { background: var(--trace-hi); box-shadow: 0 0 0 1px var(--trace), 0 0 38px rgba(255,182,39,0.25), 0 6px 16px rgba(0,0,0,0.4); }
+.btn-confirm:active { transform: translateY(1px); }
+
+/* ---- 入力欄 ------------------------------------------------------- */
+.control-settings-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 2px; }
+
+.setting-item {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 0.66rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--faint);
+}
+
+.setting-item input, #graph-type-select {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    padding: 8px;
+    outline: none;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    text-transform: none;
+}
+.setting-item input:focus, #graph-type-select:focus { border-color: var(--trace); box-shadow: 0 0 0 3px var(--trace-dim); }
+
+#graph-type-select { color: var(--muted); cursor: pointer; }
+
+/* ---- ダイアログ --------------------------------------------------- */
 .dialog-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: rgba(5, 7, 10, 0.7);
+    backdrop-filter: blur(3px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -472,284 +595,115 @@ body {
 }
 
 .dialog {
-    background: #ffffff;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius);
-    padding: 20px;
-    width: 380px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px;
+    width: 400px;
     max-width: 90vw;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    gap: 14px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
 }
 
-.dialog h3 {
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: var(--text-main);
-}
+.dialog h3 { font-size: 1.05rem; font-weight: 700; color: var(--text); }
+.dialog-body { font-size: 0.88rem; color: var(--muted); line-height: 1.5; }
 
-.dialog-body {
-    font-size: 0.88rem;
-    color: var(--text-muted);
-    line-height: 1.4;
-}
-
-.dialog-body input {
+.dialog-body input, .dialog-body textarea {
     width: 100%;
-    padding: 8px;
-    background: #ffffff;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    color: var(--text-main);
-    font-family: var(--font-family);
-    margin-top: 6px;
+    padding: 9px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: var(--font-mono);
+    margin-top: 8px;
     outline: none;
 }
+.dialog-body input:focus, .dialog-body textarea:focus { border-color: var(--trace); }
 
-.dialog-body input:focus {
-    border-color: var(--accent-blue);
-}
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-.dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 6px;
-}
-
-/* Footer / Debug Logger */
-.app-footer {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
+/* ---- フッタ / デバッグログ --------------------------------------- */
+.app-footer { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
 
 .debug-toggle-btn {
     align-self: flex-start;
     background: transparent;
     border: none;
-    color: var(--text-muted);
+    color: var(--faint);
     cursor: pointer;
-    font-family: var(--font-family);
-    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     padding: 2px 6px;
 }
-
-.debug-toggle-btn:hover {
-    color: var(--text-main);
-}
+.debug-toggle-btn:hover { color: var(--muted); }
 
 .debug-console {
-    background: #ffffff;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius);
+    background: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
     padding: 10px;
     display: flex;
     flex-direction: column;
     gap: 6px;
     max-height: 120px;
-    box-shadow: var(--shadow-main);
+    box-shadow: var(--shadow);
 }
 
 .debug-header {
     display: flex;
     justify-content: space-between;
-    font-family: var(--font-family);
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    border-bottom: 1px solid var(--border-color);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--faint);
+    border-bottom: 1px solid var(--line);
     padding-bottom: 4px;
 }
 
-.btn-clear {
-    background: transparent;
-    border: none;
-    color: var(--accent-red);
-    cursor: pointer;
-    font-size: 0.75rem;
-}
+.btn-clear { background: transparent; border: none; color: var(--red); cursor: pointer; font-size: 0.72rem; }
 
 .debug-log-list {
     flex: 1;
     overflow-y: auto;
     font-family: var(--font-mono);
-    font-size: 0.72rem;
-    color: #444444;
+    font-size: 0.7rem;
+    color: var(--muted);
     display: flex;
     flex-direction: column;
     gap: 2px;
 }
 
-/* control-settings-row and setting-item styles */
-.control-settings-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-top: 4px;
+/* ---- フォーカス可視 (アクセシビリティの床) ----------------------- */
+button:focus-visible, input:focus-visible, select:focus-visible, label:focus-visible {
+    outline: 2px solid var(--trace);
+    outline-offset: 2px;
 }
 
-.setting-item {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    font-size: 0.78rem;
-    color: var(--text-muted);
-}
-
-.setting-item input {
-    background: #ffffff;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    color: var(--text-main);
-    padding: 6px;
-    outline: none;
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-}
-
-.setting-item input:focus {
-    border-color: var(--accent-blue);
-}
-
-/* 手順ガイド（常設の小さなステップ表示） */
-.step-guide {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius);
-    box-shadow: var(--shadow-main);
-    overflow-x: auto;
-    white-space: nowrap;
-}
-
-.step-guide .step {
-    font-size: 0.78rem;
-    color: var(--text-muted);
-    padding: 3px 10px;
-    background: #f1f3f4;
-    border-radius: 999px;
-    flex: 0 0 auto;
-}
-
-.step-guide .step.active {
-    background: #e8f0fe;
-    color: var(--accent-blue);
-    font-weight: 600;
-}
-
-/* 下部固定アクションバー（親指で届く核操作） */
-.action-bar {
-    background: var(--bg-panel);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius);
-    box-shadow: var(--shadow-main);
-    padding: 8px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    flex: 0 0 auto;
-}
-
-.action-hint {
-    text-align: center;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    font-weight: 500;
-}
-
-.action-buttons {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-}
-
-.btn-jog {
-    width: 52px;
-    height: 52px;
-    border-radius: 8px;
-}
-
-.btn-jog .material-icons-round {
-    font-size: 1.6rem;
-}
-
-.btn-jog:disabled {
-    opacity: 0.4;
-    cursor: default;
-}
-
-.btn-confirm {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    min-width: 240px;
-    min-height: 52px;
-    padding: 10px 24px;
-    border: none;
-    border-radius: 10px;
-    background: var(--accent-green);
-    color: #ffffff;
-    font-family: var(--font-family);
-    font-size: 1.05rem;
-    font-weight: 700;
-    cursor: pointer;
-    box-shadow: 0 2px 6px rgba(24, 128, 56, 0.3);
-    transition: background-color 0.12s, transform 0.05s;
-}
-
-.btn-confirm .material-icons-round {
-    font-size: 1.5rem;
-}
-
-.btn-confirm:hover {
-    background: #146c2e;
-}
-
-.btn-confirm:active {
-    transform: translateY(1px);
-}
-
-/* キャリブレーション保留中はボタンを青で強調 */
-.btn-secondary.active {
-    background: #e8f0fe;
-    color: var(--accent-blue);
-    border-color: #1a73e8;
-    font-weight: 600;
-}
-
-/* iPad Responsive Adjustments */
+/* ---- iPad / レスポンシブ ------------------------------------------ */
 @media (max-width: 1024px) {
-    .workspace {
-        grid-template-columns: 1fr;
-        grid-template-rows: 1fr auto;
-    }
-    
+    .workspace { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
     .sidebar-section {
         display: grid;
         grid-template-columns: 1fr 1.2fr;
         gap: 12px;
+        overflow-y: visible;
     }
-    
-    .data-panel {
-        grid-column: span 2;
-        max-height: 200px;
-    }
+    .data-panel { grid-column: span 2; max-height: 220px; }
 }
 
 @media (max-width: 768px) {
-    .sidebar-section {
-        grid-template-columns: 1fr;
-    }
-    .data-panel {
-        grid-column: span 1;
-    }
+    .sidebar-section { grid-template-columns: 1fr; }
+    .data-panel { grid-column: span 1; }
+    .app-header h1 { font-size: 0.95rem; }
+    .btn-confirm { min-width: 180px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
 }

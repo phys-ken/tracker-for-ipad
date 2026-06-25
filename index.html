@@ -7,7 +7,7 @@
     <!-- Google Fonts & Material Icons -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -20,7 +20,7 @@
                 <h1>動画解析トラッカー <span class="badge">iPad版</span></h1>
             </div>
             <div class="header-actions">
-                <label for="video-upload" class="btn btn-primary">
+                <label for="video-upload" class="btn btn-secondary">
                     <span class="material-icons-round">video_file</span>
                     動画を選択
                 </label>
@@ -47,6 +47,11 @@
             <div class="viewer-section">
                 <div class="canvas-container" id="canvas-container">
                     <canvas id="tracker-canvas"></canvas>
+                    <!-- ビューファインダ: 計器スクリーンのコーナーブラケット（装飾・操作不可） -->
+                    <div class="viewfinder" aria-hidden="true">
+                        <span class="vf tl"></span><span class="vf tr"></span>
+                        <span class="vf bl"></span><span class="vf br"></span>
+                    </div>
                     <div class="hint-overlay" id="hint-overlay">
                         <span class="material-icons-round">cloud_upload</span>
                         <p>「動画を選択」または「サンプルで試す」で開始してください</p>
@@ -61,7 +66,7 @@
 
                 <!-- Playback bar (slim): 再生・シーク・情報 -->
                 <div class="video-controls-bar">
-                    <button class="btn-icon btn-accent" id="btn-play-pause" title="再生 / 一時停止">
+                    <button class="btn-icon btn-play" id="btn-play-pause" title="再生 / 一時停止">
                         <span class="material-icons-round">play_arrow</span>
                     </button>
                     <div class="slider-container">
@@ -97,7 +102,7 @@
                         </div>
                     </div>
                     <div style="margin-top: 6px;">
-                        <button class="btn btn-secondary btn-small" id="btn-delete-selected" style="width: 100%; color: var(--accent-red); border-color: #fad2cf; background: #fce8e6;" disabled>
+                        <button class="btn-danger-small" id="btn-delete-selected" style="width: 100%; padding: 8px;" disabled>
                             <span class="material-icons-round" style="font-size: 1.1rem; vertical-align: middle;">delete_sweep</span>
                             選択ポイントを削除
                         </button>
@@ -171,7 +176,7 @@
                             <option value="y-x">y - x (軌道描画)</option>
                         </select>
                     </div>
-                    <div style="flex: 1; min-height: 120px; background: #f1f3f4; border: 1px solid var(--border-color); border-radius: 4px; position: relative;">
+                    <div style="flex: 1; min-height: 120px; background: var(--ink); border: 1px solid var(--line); border-radius: 5px; position: relative;">
                         <canvas id="graph-canvas" style="display: block; width: 100%; height: 100%;"></canvas>
                     </div>
                 </div>
