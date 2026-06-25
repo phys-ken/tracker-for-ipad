@@ -1310,7 +1310,7 @@ function drawTrackingPoints() {
             if (p.id === appState.selectedPointId) {
                 appState.ctx.beginPath();
                 appState.ctx.arc(local.x, local.y, r * 1.6, 0, Math.PI * 2);
-                appState.ctx.strokeStyle = '#d93025'; // 赤い強調外枠
+                appState.ctx.strokeStyle = '#FFB627'; // アンバーの選択強調外枠
                 appState.ctx.lineWidth = 2.0 / scale;
                 appState.ctx.stroke();
             }
@@ -1354,11 +1354,11 @@ function drawCalibrationMarkers() {
         appState.ctx.lineTo(localO.x + 40 / scale, localO.y);
         appState.ctx.moveTo(localO.x, localO.y - 40 / scale);
         appState.ctx.lineTo(localO.x, localO.y + 40 / scale);
-        appState.ctx.strokeStyle = '#d93025';
+        appState.ctx.strokeStyle = '#FF5A52';
         appState.ctx.lineWidth = 1.5 / scale;
         appState.ctx.stroke();
-        
-        appState.ctx.fillStyle = '#d93025';
+
+        appState.ctx.fillStyle = '#FF5A52';
         appState.ctx.font = `bold ${11 / scale}px IBM Plex Sans JP`;
         appState.ctx.fillText("x", localO.x + 45 / scale, localO.y + 4 / scale);
         appState.ctx.fillText("y", localO.x - 4 / scale, localO.y - 45 / scale);
@@ -1481,32 +1481,103 @@ function deletePoint(id) {
 
 window.deletePoint = deletePoint;
 
+// --- 物理座標・運動学（速度/加速度）の計算 --------------------------------
+// 動画ピクセル座標 → 原点基準・スケール適用済みの物理座標へ
+function physCoordOf(p) {
+    let x = p.x, y = p.y;
+    const cal = appState.calibration;
+    if (cal.origin) { x = p.x - cal.origin.x; y = cal.origin.y - p.y; }
+    if (cal.scaleRatio) { x *= cal.scaleRatio; y *= cal.scaleRatio; }
+    return { x, y, t: p.time, frame: p.frame, id: p.id };
+}
+
+// 中心差分で速度・加速度を数値微分（端点は片側差分）
+function computeKinematics(sortedData) {
+    const pts = sortedData.map(physCoordOf);
+    const n = pts.length;
+    const t = pts.map(p => p.t);
+    const deriv = (arr) => arr.map((_, i) => {
+        if (n === 1) return 0;
+        if (i === 0)       return (arr[1] - arr[0]) / ((t[1] - t[0]) || 1e-9);
+        if (i === n - 1)   return (arr[n - 1] - arr[n - 2]) / ((t[n - 1] - t[n - 2]) || 1e-9);
+        return (arr[i + 1] - arr[i - 1]) / ((t[i + 1] - t[i - 1]) || 1e-9);
+    });
+    const x = pts.map(p => p.x), y = pts.map(p => p.y);
+    const vx = deriv(x), vy = deriv(y);
+    const ax = deriv(vx), ay = deriv(vy);
+    return pts.map((p, i) => ({
+        t: t[i], x: x[i], y: y[i],
+        vx: vx[i], vy: vy[i], v: Math.hypot(vx[i], vy[i]),
+        ax: ax[i], ay: ay[i], a: Math.hypot(ax[i], ay[i]),
+        id: p.id, frame: p.frame
+    }));
+}
+
 // --- リアルタイムグラフの描画 ---
+let graphPlotPoints = []; // クリック当たり判定用に最後の描画座標を保持
+
 function setupGraphEvents() {
     const selector = document.getElementById('graph-type-select');
-    if (selector) {
-        selector.addEventListener('change', updateGraph);
+    if (selector) selector.addEventListener('change', updateGraph);
+
+    const graphCanvas = document.getElementById('graph-canvas');
+    if (graphCanvas) {
+        graphCanvas.addEventListener('click', (e) => {
+            const rect = graphCanvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left) * (graphCanvas.width / (rect.width || 1));
+            const my = (e.clientY - rect.top) * (graphCanvas.height / (rect.height || 1));
+            let best = null, bestDist = 16;
+            graphPlotPoints.forEach(p => {
+                const d = Math.hypot(p.cx - mx, p.cy - my);
+                if (d < bestDist) { bestDist = d; best = p; }
+            });
+            if (best) {
+                setSelectedPoint(best.id);
+                seekToFrame(best.frame);
+                drawVideoFrame();
+                updateDataTable();
+                updateGraph();
+            }
+        });
     }
+}
+
+// グラフ種別 → 系列の定義（速度・加速度を含む）
+function graphSeriesFor(graphType, kin, unit) {
+    const t = kin.map(p => p.t);
+    const map = {
+        'y-t':  { xv: t, yv: kin.map(p => p.y),  lx: 't (s)',     ly: `y (${unit})` },
+        'x-t':  { xv: t, yv: kin.map(p => p.x),  lx: 't (s)',     ly: `x (${unit})` },
+        'y-x':  { xv: kin.map(p => p.x), yv: kin.map(p => p.y), lx: `x (${unit})`, ly: `y (${unit})`, traj: true },
+        'vx-t': { xv: t, yv: kin.map(p => p.vx), lx: 't (s)', ly: `vx (${unit}/s)` },
+        'vy-t': { xv: t, yv: kin.map(p => p.vy), lx: 't (s)', ly: `vy (${unit}/s)` },
+        'v-t':  { xv: t, yv: kin.map(p => p.v),  lx: 't (s)', ly: `速さ (${unit}/s)` },
+        'ax-t': { xv: t, yv: kin.map(p => p.ax), lx: 't (s)', ly: `ax (${unit}/s²)` },
+        'ay-t': { xv: t, yv: kin.map(p => p.ay), lx: 't (s)', ly: `ay (${unit}/s²)` },
+        'a-t':  { xv: t, yv: kin.map(p => p.a),  lx: 't (s)', ly: `加速度 (${unit}/s²)` }
+    };
+    return map[graphType] || map['y-t'];
 }
 
 function updateGraph() {
     const graphCanvas = document.getElementById('graph-canvas');
     if (!graphCanvas) return;
-    
+
     // 親要素のサイズに Canvas の物理解像度をフィットさせる
     const container = graphCanvas.parentElement;
     if (container.clientWidth > 0 && container.clientHeight > 0) {
         graphCanvas.width = container.clientWidth;
         graphCanvas.height = container.clientHeight;
     }
-    
+
     const gCtx = graphCanvas.getContext('2d');
     gCtx.clearRect(0, 0, graphCanvas.width, graphCanvas.height);
-    
+    graphPlotPoints = [];
+
     const data = appState.trackingData
         .filter(p => p.objectId === appState.activeObjectId)
         .sort((a, b) => a.frame - b.frame);
-        
+
     if (data.length === 0) {
         gCtx.fillStyle = '#7A828E';
         gCtx.font = '11px IBM Plex Sans JP';
@@ -1515,47 +1586,14 @@ function updateGraph() {
         gCtx.fillText("測定が開始されると自動で描画されます", graphCanvas.width / 2, graphCanvas.height / 2);
         return;
     }
-    
-    const graphType = document.getElementById('graph-type-select').value; // 'y-t' | 'x-t' | 'y-x'
-    
-    // 物理座標変換ヘルパー
-    const getPhysCoord = (p) => {
-        let physX = p.x;
-        let physY = p.y;
-        if (appState.calibration.origin) {
-            physX = p.x - appState.calibration.origin.x;
-            physY = appState.calibration.origin.y - p.y;
-        }
-        if (appState.calibration.scaleRatio) {
-            physX *= appState.calibration.scaleRatio;
-            physY *= appState.calibration.scaleRatio;
-        }
-        return { x: physX, y: physY, t: p.time };
-    };
-    
-    const points = data.map(getPhysCoord);
-    
-    let valX = [], valY = [];
-    let labelX = "", labelY = "";
+
+    const graphType = document.getElementById('graph-type-select').value;
     const unit = appState.calibration.scaleRatio ? "cm" : "px";
-    
-    if (graphType === 'y-t') {
-        valX = points.map(p => p.t);
-        valY = points.map(p => p.y);
-        labelX = "t (s)";
-        labelY = `y (${unit})`;
-    } else if (graphType === 'x-t') {
-        valX = points.map(p => p.t);
-        valY = points.map(p => p.x);
-        labelX = "t (s)";
-        labelY = `x (${unit})`;
-    } else if (graphType === 'y-x') {
-        valX = points.map(p => p.x);
-        valY = points.map(p => p.y);
-        labelX = `x (${unit})`;
-        labelY = `y (${unit})`;
-    }
-    
+    const kin = computeKinematics(data);
+    const series = graphSeriesFor(graphType, kin, unit);
+    const valX = series.xv, valY = series.yv;
+    const labelX = series.lx, labelY = series.ly;
+
     let minX = Math.min(...valX);
     let maxX = Math.max(...valX);
     let minY = Math.min(...valY);
@@ -1650,84 +1688,116 @@ function updateGraph() {
     });
     gCtx.stroke();
     
-    // ドットプロット描画
+    // ドットプロット描画 ＆ クリック当たり判定座標の記録
     valX.forEach((vx, idx) => {
         const cx = toCanvasX(vx);
         const cy = toCanvasY(valY[idx]);
+        graphPlotPoints.push({ cx, cy, id: data[idx].id, frame: data[idx].frame });
+
         gCtx.beginPath();
-        
-        // 選択されたポイントはプロット上でも大きく表示する
+        // 選択されたポイントはプロット上でも大きく＆アンバーで強調（三者連動）
         const isSel = (data[idx].id === appState.selectedPointId);
-        gCtx.arc(cx, cy, isSel ? 4.5 : 3.0, 0, Math.PI * 2);
-        gCtx.fillStyle = COLOR_MAP[(appState.activeObjectId - 1) % COLOR_MAP.length];
+        gCtx.arc(cx, cy, isSel ? 5.0 : 3.0, 0, Math.PI * 2);
+        gCtx.fillStyle = isSel ? '#FFB627' : COLOR_MAP[(appState.activeObjectId - 1) % COLOR_MAP.length];
         gCtx.fill();
-        gCtx.strokeStyle = isSel ? '#d93025' : '#ffffff';
-        gCtx.lineWidth = isSel ? 1.5 : 1;
+        gCtx.strokeStyle = isSel ? '#FFB627' : '#0F1216';
+        gCtx.lineWidth = isSel ? 2 : 1;
         gCtx.stroke();
     });
 }
 
 // --- エクスポート ---
+// 全物体について 位置・速度・加速度 を計算した行列を作る
+function buildExportTable() {
+    const unit = appState.calibration.scaleRatio ? 'cm' : 'px';
+    const header = ['object_id', 'frame', 't (s)',
+        `x (${unit})`, `y (${unit})`,
+        `vx (${unit}/s)`, `vy (${unit}/s)`, `v (${unit}/s)`,
+        `ax (${unit}/s^2)`, `ay (${unit}/s^2)`, `a (${unit}/s^2)`];
+    const rows = [];
+
+    const objectIds = [...new Set(appState.trackingData.map(p => p.objectId))].sort((a, b) => a - b);
+    objectIds.forEach(oid => {
+        const sorted = appState.trackingData
+            .filter(p => p.objectId === oid)
+            .sort((a, b) => a.frame - b.frame);
+        const kin = computeKinematics(sorted);
+        kin.forEach(k => {
+            rows.push([oid, k.frame,
+                round(k.t, 4), round(k.x, 3), round(k.y, 3),
+                round(k.vx, 3), round(k.vy, 3), round(k.v, 3),
+                round(k.ax, 3), round(k.ay, 3), round(k.a, 3)]);
+        });
+    });
+    return { header, rows };
+}
+
+function round(v, d) { const m = Math.pow(10, d); return Math.round(v * m) / m; }
+
+function tableToTSV(table) {
+    const lines = [table.header.join('\t')];
+    table.rows.forEach(r => lines.push(r.join('\t')));
+    return lines.join('\n') + '\n';
+}
+
 function setupExport() {
     const btnExport = document.getElementById('btn-export');
     if (!btnExport) return;
-    
+
     btnExport.addEventListener('click', () => {
         if (appState.trackingData.length === 0) {
             logDebug("エクスポートするデータがありません。");
             return;
         }
-        
-        let csvContent = "t (s)\tx (cm_or_px)\ty (cm_or_px)\tobject_id\n";
-        
-        const sorted = [...appState.trackingData].sort((a, b) => {
-            if (a.objectId !== b.objectId) return a.objectId - b.objectId;
-            return a.frame - b.frame;
-        });
-        
-        sorted.forEach(p => {
-            let physX = p.x;
-            let physY = p.y;
-            if (appState.calibration.origin) {
-                physX = p.x - appState.calibration.origin.x;
-                physY = appState.calibration.origin.y - p.y;
-            }
-            if (appState.calibration.scaleRatio) {
-                physX *= appState.calibration.scaleRatio;
-                physY *= appState.calibration.scaleRatio;
-            }
-            csvContent += `${p.time.toFixed(3)}\t${physX.toFixed(3)}\t${physY.toFixed(3)}\t${p.objectId}\n`;
-        });
-        
+        const table = buildExportTable();
+        const tsv = tableToTSV(table);
+        const hasXlsx = typeof XLSX !== 'undefined';
+
         const dialogText = `
-            <textarea style="width:100%; height:130px; font-family:'IBM Plex Mono',monospace; background:#0F1216; color:#E6EAEF; border:1px solid #2B333D; border-radius:5px; padding:8px; font-size:0.8rem;" readonly>${csvContent}</textarea>
+            <p style="margin-bottom:6px;">位置に加え、速度・加速度（数値微分）も含みます。</p>
+            <textarea style="width:100%; height:120px; font-family:'IBM Plex Mono',monospace; background:#0F1216; color:#E6EAEF; border:1px solid #2B333D; border-radius:5px; padding:8px; font-size:0.78rem;" readonly>${tsv}</textarea>
             <div style="margin-top:10px; display:flex; gap:8px;">
-                <button class="btn btn-secondary" id="btn-copy-tsv" style="flex:1; font-size:0.8rem;">コピー</button>
-                <button class="btn btn-primary" id="btn-download-tsv" style="flex:1; font-size:0.8rem;">ファイル保存</button>
+                <button class="btn btn-secondary" id="btn-copy-tsv" style="flex:1;">TSVをコピー</button>
+                <button class="btn btn-secondary" id="btn-download-tsv" style="flex:1;">TSV保存</button>
+                <button class="btn btn-primary" id="btn-download-xlsx" style="flex:1;" ${hasXlsx ? '' : 'disabled title="xlsxライブラリ未読込（ネット接続が必要）"'}>xlsx保存</button>
             </div>
         `;
-        
-        showInputDialog("データエクスポート (TSV形式)", dialogText, "", () => {});
-        
+
+        showInputDialog("データエクスポート", dialogText, "", () => {});
+
         document.getElementById('btn-copy-tsv').addEventListener('click', () => {
-            navigator.clipboard.writeText(csvContent)
-                .then(() => logDebug("TSVをコピーしました"))
+            navigator.clipboard.writeText(tsv)
+                .then(() => logDebug("TSVをクリップボードにコピーしました（表計算に貼り付け可）"))
                 .catch(() => logDebug("コピー失敗"));
         });
-        
+
         document.getElementById('btn-download-tsv').addEventListener('click', () => {
-            const blob = new Blob([csvContent], { type: 'text/tab-separated-values;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.setAttribute("href", url);
-            link.setAttribute("download", "tracking_data.tsv");
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
-            logDebug("TSVファイルをダウンロードしました");
+            downloadBlob(new Blob([tsv], { type: 'text/tab-separated-values;charset=utf-8;' }), 'tracking_data.tsv');
+            logDebug("TSVファイルを保存しました");
         });
+
+        const xlsxBtn = document.getElementById('btn-download-xlsx');
+        if (xlsxBtn && hasXlsx) {
+            xlsxBtn.addEventListener('click', () => {
+                const ws = XLSX.utils.aoa_to_sheet([table.header, ...table.rows]);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'tracking');
+                XLSX.writeFile(wb, 'tracking_data.xlsx');
+                logDebug("xlsxファイルを保存しました");
+            });
+        }
     });
+}
+
+function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 }
 
 // --- ダイアログの制御 ---
@@ -1742,7 +1812,7 @@ function showInputDialog(title, bodyText, defaultValue, onOk) {
     
     titleEl.textContent = title;
     
-    if (bodyText.includes("<textarea>") || bodyText.includes("<input>")) {
+    if (bodyText.includes("<textarea") || bodyText.includes("<input") || bodyText.includes("<button")) {
         bodyEl.innerHTML = bodyText;
     } else {
         bodyEl.innerHTML = `

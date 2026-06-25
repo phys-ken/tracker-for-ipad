@@ -174,10 +174,22 @@
                 <div class="panel" style="min-height: 200px;">
                     <div class="panel-header-row" style="border:none; padding:0;">
                         <h2>リアルタイムグラフ</h2>
-                        <select id="graph-type-select" style="font-size: 0.75rem; padding: 2px 4px; border: 1px solid var(--border-color); border-radius: 4px; outline:none;">
-                            <option value="y-t">y - t (垂直変位)</option>
-                            <option value="x-t">x - t (水平変位)</option>
-                            <option value="y-x">y - x (軌道描画)</option>
+                        <select id="graph-type-select" style="font-size: 0.75rem; padding: 2px 4px; border-radius: 4px; outline:none;">
+                            <optgroup label="位置">
+                                <option value="y-t">y - t (垂直変位)</option>
+                                <option value="x-t">x - t (水平変位)</option>
+                                <option value="y-x">y - x (軌道)</option>
+                            </optgroup>
+                            <optgroup label="速度">
+                                <option value="v-t">速さ - t</option>
+                                <option value="vx-t">vx - t</option>
+                                <option value="vy-t">vy - t</option>
+                            </optgroup>
+                            <optgroup label="加速度">
+                                <option value="a-t">加速度 - t</option>
+                                <option value="ax-t">ax - t</option>
+                                <option value="ay-t">ay - t</option>
+                            </optgroup>
                         </select>
                     </div>
                     <div style="flex: 1; min-height: 120px; background: var(--ink); border: 1px solid var(--line); border-radius: 5px; position: relative;">
@@ -270,6 +282,8 @@
     <!-- Hidden Video Element for background playing & frame capturing -->
     <video id="hidden-video" style="display: none;" playsinline muted></video>
 
+    <!-- xlsx 出力用 (SheetJS, CDN) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
