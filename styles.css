@@ -555,7 +555,7 @@ body {
 .btn-confirm:active { transform: translateY(1px); }
 
 /* ---- 入力欄 ------------------------------------------------------- */
-.control-settings-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 2px; }
+.control-settings-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 10px; margin-top: 2px; }
 
 .setting-item {
     display: flex;

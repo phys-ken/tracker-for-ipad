@@ -9,6 +9,9 @@ const appState = {
     isPlaying: false,
     videoDuration: 0,
     videoFps: 30,
+    fpsMeasured: false,    // 実測FPSが確定したか
+    fpsManual: false,      // ユーザーが手動でFPSを上書きしたか
+    isPreviewing: false,   // 読込直後のプレビュー再生中か
     currentFrame: 0,
     totalFrames: 0,
     viewState: { scale: 1, offsetX: 0, offsetY: 0 },
@@ -172,6 +175,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupGraphEvents();
     setupDeletionEvent();
     setupUndo();
+    setupFpsInput();
 
     // ウィンドウリサイズ時の処理
     window.addEventListener('resize', handleResize);
@@ -186,6 +190,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     updateUndoButton();
     updateActionHint();
+    updateStepGuide();
+    refreshFpsUI();
 
     // 空スタート: 動画はユーザーが「動画を選択」または「サンプルで試す」で読み込む
     logDebug("起動完了。動画を読み込んでください。");
@@ -213,6 +219,8 @@ function loadSampleVideo() {
             const url = URL.createObjectURL(blob);
             const hintOverlay = document.getElementById('hint-overlay');
             if (hintOverlay) hintOverlay.style.opacity = '0';
+            appState.fpsManual = false;
+            appState.fpsMeasured = false;
             appState.videoElement.src = url;
             appState.videoElement.load();
         })
@@ -262,7 +270,10 @@ function setupFileUpload() {
             
             const fileUrl = URL.createObjectURL(file);
             if (hintOverlay) hintOverlay.style.opacity = '0';
-            
+
+            // 新しい動画では実FPSを測り直す
+            appState.fpsManual = false;
+            appState.fpsMeasured = false;
             appState.videoElement.src = fileUrl;
             appState.videoElement.load();
         });
@@ -282,12 +293,14 @@ function setupFileUpload() {
             slider.value = 0;
         }
         
-        const fpsLabel = document.getElementById('lbl-fps');
-        if (fpsLabel) fpsLabel.textContent = appState.videoFps;
-        
+        refreshFpsUI();
         updateTimeDisplay();
         handleResize();
         updateGraph();
+        updateStepGuide();
+
+        // 読込直後に1回プレビュー再生し、その間に実FPSを測定して先頭へ戻る
+        startPreviewAndMeasureFps();
     });
     
     appState.videoElement.addEventListener('canplay', () => {
@@ -306,6 +319,151 @@ function setupFileUpload() {
     appState.videoElement.addEventListener('error', () => {
         logDebug(`動画エラー発生: ${appState.videoElement.error ? appState.videoElement.error.message : 'Unknown'}`);
     });
+}
+
+// --- FPS実測 ＆ 読込直後プレビュー -----------------------------------------
+// requestVideoFrameCallback でフレーム提示時刻を測り、実FPSを確定する。
+// 同時に動画を1回プレビュー再生し、終わったら（または停止されたら）先頭に戻る。
+let previewSamples = [];
+let previewLastMediaTime = null;
+let rvfcSupported = typeof HTMLVideoElement !== 'undefined'
+    && 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+
+function startPreviewAndMeasureFps() {
+    const v = appState.videoElement;
+    if (!v || v.readyState < 1) return;
+
+    previewSamples = [];
+    previewLastMediaTime = null;
+    appState.isPreviewing = true;
+
+    const onPreviewEnded = () => {
+        v.removeEventListener('ended', onPreviewEnded);
+        finalizePreview(true); // 末尾まで再生 → 先頭へ戻す
+    };
+    v.addEventListener('ended', onPreviewEnded);
+
+    // rVFC でフレーム間隔を測定（対応ブラウザのみ）
+    if (rvfcSupported && !appState.fpsManual) {
+        const onFrame = (now, meta) => {
+            if (previewLastMediaTime !== null) {
+                const dt = meta.mediaTime - previewLastMediaTime;
+                if (dt > 0.0003 && dt < 1) previewSamples.push(dt);
+            }
+            previewLastMediaTime = meta.mediaTime;
+            if (appState.isPreviewing && !v.paused && !v.ended) {
+                v.requestVideoFrameCallback(onFrame);
+            }
+        };
+        v.requestVideoFrameCallback(onFrame);
+    }
+
+    // ミュート再生（iPad/Safariでも playsinline muted なら自動再生可）
+    v.currentTime = 0;
+    const p = v.play();
+    if (p && p.catch) {
+        p.then(() => { appState.isPlaying = true; setPlayPauseIcon(true); requestAnimationFrame(renderLoop); })
+         .catch(() => { logDebug('自動プレビュー再生は不可。先頭フレームを表示します。'); finalizePreview(true); });
+    } else {
+        appState.isPlaying = true; setPlayPauseIcon(true); requestAnimationFrame(renderLoop);
+    }
+    logDebug('プレビュー再生＋FPS実測を開始しました。');
+}
+
+// プレビュー終了処理。returnToStart=true なら先頭フレームへ。
+function finalizePreview(returnToStart) {
+    if (!appState.isPreviewing) return;
+    appState.isPreviewing = false;
+
+    const v = appState.videoElement;
+    v.pause();
+    appState.isPlaying = false;
+    setPlayPauseIcon(false);
+
+    // FPSを確定（実測サンプルが十分あれば）
+    if (!appState.fpsManual && previewSamples.length >= 4) {
+        const fps = fpsFromSamples(previewSamples);
+        if (fps) {
+            appState.videoFps = fps;
+            appState.fpsMeasured = true;
+            appState.totalFrames = Math.max(0, Math.floor(appState.videoDuration * fps));
+            logDebug(`実測FPS: ${fps}（${previewSamples.length}フレームから推定）`);
+        }
+    }
+    refreshFpsUI();
+    const slider = document.getElementById('frame-slider');
+    if (slider) slider.max = appState.totalFrames;
+
+    if (returnToStart) {
+        seekToFrame(0);
+    } else {
+        appState.currentFrame = Math.round(v.currentTime * appState.videoFps);
+        const slider2 = document.getElementById('frame-slider');
+        if (slider2) slider2.value = appState.currentFrame;
+        updateTimeDisplay();
+    }
+    persistState();
+}
+
+// フレーム間隔サンプルの中央値からFPSを推定。近ければ常用値にスナップ。
+function fpsFromSamples(samples) {
+    const sorted = [...samples].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    if (!median || median <= 0) return null;
+    let fps = 1 / median;
+    const common = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60, 100, 120, 240];
+    let best = null, bestErr = 0.03; // 3%以内で最も近い常用値にスナップ
+    for (const c of common) {
+        const err = Math.abs(fps - c) / c;
+        if (err < bestErr) { bestErr = err; best = c; }
+    }
+    if (best !== null) return Math.round(best * 1000) / 1000;
+    return Math.round(fps * 100) / 100;
+}
+
+// FPS表示（インジケータ＋入力欄）を現在値に同期
+function refreshFpsUI() {
+    const lbl = document.getElementById('lbl-fps');
+    if (lbl) lbl.textContent = appState.videoFps + (appState.fpsMeasured && !appState.fpsManual ? '' : '*');
+    const input = document.getElementById('fps-input');
+    if (input && document.activeElement !== input) input.value = appState.videoFps;
+}
+
+// 手動FPS上書き
+function setFpsManual(val) {
+    const fps = parseFloat(val);
+    if (isNaN(fps) || fps <= 0) { refreshFpsUI(); return; }
+    appState.videoFps = Math.round(fps * 100) / 100;
+    appState.fpsManual = true;
+    appState.fpsMeasured = false;
+    if (appState.videoDuration) {
+        appState.totalFrames = Math.max(0, Math.floor(appState.videoDuration * appState.videoFps));
+        const slider = document.getElementById('frame-slider');
+        if (slider) slider.max = appState.totalFrames;
+    }
+    // 既存点の時刻を新FPSで再計算
+    appState.trackingData.forEach(p => { p.time = p.frame / appState.videoFps; });
+    refreshFpsUI();
+    persistState();
+    updateDataTable();
+    updateGraph();
+    logDebug(`FPSを手動設定: ${appState.videoFps}`);
+}
+
+function setupFpsInput() {
+    const input = document.getElementById('fps-input');
+    if (input) {
+        input.addEventListener('change', (e) => setFpsManual(e.target.value));
+    }
+}
+
+// 再生/一時停止アイコンの切替（共通化）
+function setPlayPauseIcon(playing) {
+    const btnPlay = document.getElementById('btn-play-pause');
+    if (btnPlay) {
+        const span = btnPlay.querySelector('span');
+        if (span) span.textContent = playing ? 'pause' : 'play_arrow';
+    }
 }
 
 // --- オフスクリーン Canvas の更新 ---
@@ -364,26 +522,30 @@ function stepFrame(delta) {
 
 function seekToFrame(frame) {
     appState.currentFrame = Math.max(0, Math.min(appState.totalFrames, frame));
-    const targetTime = appState.currentFrame / appState.videoFps;
+    // フレーム中央時刻を狙うと、境界でのデコードずれ（特にSafari/iPad）を避けやすい
+    const targetTime = (appState.currentFrame + 0.5) / appState.videoFps;
     appState.videoElement.currentTime = Math.min(appState.videoDuration - 0.001, Math.max(0, targetTime));
-    
+
     const slider = document.getElementById('frame-slider');
     if (slider) slider.value = appState.currentFrame;
 }
 
 function playVideo() {
     appState.isPlaying = true;
-    const btnPlay = document.getElementById('btn-play-pause');
-    if (btnPlay) btnPlay.querySelector('span').textContent = 'pause';
+    setPlayPauseIcon(true);
     appState.videoElement.play();
     logDebug("再生開始");
     requestAnimationFrame(renderLoop);
 }
 
 function pauseVideo() {
+    // プレビュー再生中の一時停止は「プレビュー終了（その場で停止）」として扱う
+    if (appState.isPreviewing) {
+        finalizePreview(false);
+        return;
+    }
     appState.isPlaying = false;
-    const btnPlay = document.getElementById('btn-play-pause');
-    if (btnPlay) btnPlay.querySelector('span').textContent = 'play_arrow';
+    setPlayPauseIcon(false);
     appState.videoElement.pause();
     logDebug("一時停止");
 }
@@ -414,7 +576,10 @@ function updateTimeDisplay() {
     const timeDisplay = document.getElementById('time-display');
     if (!timeDisplay) return;
     
-    const curSec = appState.videoElement.currentTime;
+    // フレーム基準の時刻（中央シークの+0.5ぶんを表示に出さない）
+    const curSec = appState.isPreviewing
+        ? appState.videoElement.currentTime
+        : appState.currentFrame / appState.videoFps;
     const durSec = appState.videoDuration;
     
     const format = (sec) => {
@@ -746,6 +911,25 @@ function updateActionHint() {
         if (span) span.textContent = label;
     }
     if (hint) hint.textContent = text;
+}
+
+// 手順ガイド: 今やるべき最初の未完ステップを点灯する
+function updateStepGuide() {
+    const steps = document.querySelectorAll('.step-guide .step');
+    if (!steps.length) return;
+    const hasVideo = !!(appState.videoElement && appState.videoElement.src);
+    const hasScale = !!appState.calibration.scaleRatio;
+    const hasOrigin = !!appState.calibration.origin;
+    const hasData = appState.trackingData.length > 0;
+
+    let active = 0;                 // ① 動画
+    if (hasVideo) active = 1;       // ② スケール
+    if (hasVideo && hasScale) active = 2;            // ③ 原点
+    if (hasVideo && hasScale && hasOrigin) active = 3; // ④ トラッキング
+    if (hasVideo && hasData) active = Math.max(active, 3);
+    if (hasVideo && hasData && hasScale && hasOrigin) active = 4; // ⑤ 出力（任意）
+
+    steps.forEach((el, i) => el.classList.toggle('active', i === active));
 }
 
 function setupModeButtons() {
@@ -1232,6 +1416,7 @@ function updateDataTable() {
         
     if (filteredData.length === 0) {
         tableBody.innerHTML = `<tr class="empty-row"><td colspan="4">データがありません</td></tr>`;
+        updateStepGuide();
         return;
     }
     
@@ -1277,6 +1462,8 @@ function updateDataTable() {
         
         tableBody.appendChild(tr);
     });
+
+    updateStepGuide();
 }
 
 function deletePoint(id) {
