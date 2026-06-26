@@ -733,6 +733,74 @@ details.panel-collapsible[open] > summary h2::after { transform: rotate(180deg);
     gap: 2px;
 }
 
+/* ---- リアルタイムグラフ（複数表示・縦積み） ----------------------- */
+.graph-panel { display: flex; flex-direction: column; }
+
+.graph-hint-label {
+    font-size: 0.68rem;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+}
+
+.graph-type-checklist {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    margin: 8px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+}
+.graph-type-checklist .gtc-group {
+    font-size: 0.62rem;
+    color: var(--cyan);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-left: 2px;
+}
+.graph-type-checklist .gtc-group:not(:first-child) { margin-left: 6px; }
+.graph-type-checklist label {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-family: var(--font-mono, 'IBM Plex Mono', monospace);
+    font-size: 0.74rem;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+}
+.graph-type-checklist input[type="checkbox"] {
+    accent-color: var(--trace);
+    width: 13px;
+    height: 13px;
+    cursor: pointer;
+}
+.graph-type-checklist label:has(input:checked) { color: var(--trace); }
+
+.graph-stack {
+    flex: 1;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+}
+.mini-graph {
+    position: relative;
+    flex: 0 0 auto;
+    height: 130px;
+    background: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+}
+.mini-graph canvas { display: block; width: 100%; height: 100%; }
+.graph-empty-hint {
+    padding: 24px 8px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.8rem;
+}
+
 /* ---- フォーカス可視 (アクセシビリティの床) ----------------------- */
 button:focus-visible, input:focus-visible, select:focus-visible, label:focus-visible {
     outline: 2px solid var(--trace);

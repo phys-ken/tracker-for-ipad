@@ -14,6 +14,7 @@ const appState = {
     isPreviewing: false,   // 読込直後のプレビュー再生中か
     currentFrame: 0,
     totalFrames: 0,
+    frameTimes: [],        // 実測した各フレームの提示時刻(mediaTime)。空ならfps換算にフォールバック
     viewState: { scale: 1, offsetX: 0, offsetY: 0 },
     // 中央十字＋確定方式: 通常はトラッキング。原点/スケール設定中だけ pendingCapture が立つ
     pendingCapture: null, // null | 'origin' | 'scale'
@@ -223,6 +224,7 @@ function loadSampleVideo() {
             if (hintOverlay) hintOverlay.style.opacity = '0';
             appState.fpsManual = false;
             appState.fpsMeasured = false;
+            appState.frameTimes = [];
             appState.videoElement.src = url;
             appState.videoElement.load();
         })
@@ -276,6 +278,7 @@ function setupFileUpload() {
             // 新しい動画では実FPSを測り直す
             appState.fpsManual = false;
             appState.fpsMeasured = false;
+            appState.frameTimes = [];
             appState.videoElement.src = fileUrl;
             appState.videoElement.load();
         });
@@ -327,6 +330,7 @@ function setupFileUpload() {
 // requestVideoFrameCallback でフレーム提示時刻を測り、実FPSを確定する。
 // 同時に動画を1回プレビュー再生し、終わったら（または停止されたら）先頭に戻る。
 let previewSamples = [];
+let previewFrameTimes = [];   // プレビュー中に観測した各フレームの mediaTime
 let previewLastMediaTime = null;
 let rvfcSupported = typeof HTMLVideoElement !== 'undefined'
     && 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
@@ -336,6 +340,7 @@ function startPreviewAndMeasureFps() {
     if (!v || v.readyState < 1) return;
 
     previewSamples = [];
+    previewFrameTimes = [];
     previewLastMediaTime = null;
     appState.isPreviewing = true;
 
@@ -348,6 +353,7 @@ function startPreviewAndMeasureFps() {
     // rVFC でフレーム間隔を測定（対応ブラウザのみ）
     if (rvfcSupported && !appState.fpsManual) {
         const onFrame = (now, meta) => {
+            previewFrameTimes.push(meta.mediaTime);
             if (previewLastMediaTime !== null) {
                 const dt = meta.mediaTime - previewLastMediaTime;
                 if (dt > 0.0003 && dt < 1) previewSamples.push(dt);
@@ -392,6 +398,22 @@ function finalizePreview(returnToStart) {
             logDebug(`実測FPS: ${fps}（${previewSamples.length}フレームから推定）`);
         }
     }
+
+    // 実フレーム時刻表を構築（プレビュー中にほぼ全フレームを観測できた場合のみ）。
+    // これによりコマ番号→時刻のズレ（末尾の重複・先頭スキップ）が解消する。
+    if (!appState.fpsManual) {
+        const table = buildFrameTimeTable(previewFrameTimes);
+        const expected = appState.videoFps ? Math.floor(appState.videoDuration * appState.videoFps) : 0;
+        if (table.length >= 2 && (expected === 0 || table.length >= expected * 0.8)) {
+            appState.frameTimes = table;
+            appState.totalFrames = table.length - 1;
+            logDebug(`実フレーム時刻表を構築: ${table.length}フレーム（コマ番号と1:1対応）`);
+        } else {
+            appState.frameTimes = [];
+            logDebug(`フレーム時刻表は不採用（観測${table.length}/推定${expected}）。fps換算を使用。`);
+        }
+    }
+
     refreshFpsUI();
     const slider = document.getElementById('frame-slider');
     if (slider) slider.max = appState.totalFrames;
@@ -423,6 +445,40 @@ function fpsFromSamples(samples) {
     return Math.round(fps * 100) / 100;
 }
 
+// 観測した mediaTime 列 → 昇順・重複除去したフレーム時刻表
+function buildFrameTimeTable(times) {
+    const sorted = [...times].sort((a, b) => a - b);
+    const out = [];
+    const eps = 1e-3; // 1ms 以内は同一フレームとみなす
+    for (const t of sorted) {
+        if (out.length === 0 || t - out[out.length - 1] > eps) out.push(t);
+    }
+    return out;
+}
+
+// コマ番号 → そのフレームの実時刻（s）。表が無ければ fps 換算にフォールバック。
+function frameTimeOf(i) {
+    const ft = appState.frameTimes;
+    if (ft && ft.length) {
+        const n = Math.max(0, Math.min(ft.length - 1, i));
+        return ft[n];
+    }
+    return i / appState.videoFps;
+}
+
+// コマ番号 → シーク先の currentTime（s）。表があればフレーム表示区間の中央を狙い、
+// デコード境界の丸めズレを避けて確実にそのフレームを表示させる。
+function seekTimeOf(i) {
+    const ft = appState.frameTimes;
+    if (ft && ft.length) {
+        const n = Math.max(0, Math.min(ft.length - 1, i));
+        if (n < ft.length - 1) return (ft[n] + ft[n + 1]) / 2;
+        if (ft.length >= 2)    return Math.min(appState.videoDuration - 0.001, ft[n] + (ft[n] - ft[n - 1]) / 2);
+        return ft[n];
+    }
+    return (i + 0.5) / appState.videoFps;
+}
+
 // FPS表示（インジケータ＋入力欄）を現在値に同期
 function refreshFpsUI() {
     const lbl = document.getElementById('lbl-fps');
@@ -438,13 +494,14 @@ function setFpsManual(val) {
     appState.videoFps = Math.round(fps * 100) / 100;
     appState.fpsManual = true;
     appState.fpsMeasured = false;
+    appState.frameTimes = []; // 手動fps指定時は実測時刻表を破棄し、一様fpsを採用
     if (appState.videoDuration) {
         appState.totalFrames = Math.max(0, Math.floor(appState.videoDuration * appState.videoFps));
         const slider = document.getElementById('frame-slider');
         if (slider) slider.max = appState.totalFrames;
     }
     // 既存点の時刻を新FPSで再計算
-    appState.trackingData.forEach(p => { p.time = p.frame / appState.videoFps; });
+    appState.trackingData.forEach(p => { p.time = frameTimeOf(p.frame); });
     refreshFpsUI();
     persistState();
     updateDataTable();
@@ -524,8 +581,9 @@ function stepFrame(delta) {
 
 function seekToFrame(frame) {
     appState.currentFrame = Math.max(0, Math.min(appState.totalFrames, frame));
-    // フレーム中央時刻を狙うと、境界でのデコードずれ（特にSafari/iPad）を避けやすい
-    const targetTime = (appState.currentFrame + 0.5) / appState.videoFps;
+    // 実フレーム時刻表があればその区間中央へ、無ければ fps 換算でフレーム中央へ。
+    // 境界でのデコードずれ（特にSafari/iPad）を避けやすい。
+    const targetTime = seekTimeOf(appState.currentFrame);
     appState.videoElement.currentTime = Math.min(appState.videoDuration - 0.001, Math.max(0, targetTime));
 
     const slider = document.getElementById('frame-slider');
@@ -581,7 +639,7 @@ function updateTimeDisplay() {
     // フレーム基準の時刻（中央シークの+0.5ぶんを表示に出さない）
     const curSec = appState.isPreviewing
         ? appState.videoElement.currentTime
-        : appState.currentFrame / appState.videoFps;
+        : frameTimeOf(appState.currentFrame);
     const durSec = appState.videoDuration;
     
     const format = (sec) => {
@@ -601,17 +659,18 @@ function handleResize() {
     
     const containerWidth = container.clientWidth;
     const containerHeight = container.clientHeight;
-    
+
     const vWidth = appState.videoElement.videoWidth;
     const vHeight = appState.videoElement.videoHeight;
-    
-    const scale = Math.min(containerWidth / vWidth, containerHeight / vHeight);
-    
-    appState.canvas.width = vWidth * scale;
-    appState.canvas.height = vHeight * scale;
-    
-    logDebug(`Canvasリサイズ: ${appState.canvas.width.toFixed(0)}x${appState.canvas.height.toFixed(0)} (Video: ${vWidth}x${vHeight})`);
-    
+
+    // Canvas はコンテナ全面。動画は getFitMetrics() でレターボックス配置するため、
+    // 縦長動画でもズーム/パン時に左右いっぱいまで使える。
+    appState.canvas.width = containerWidth;
+    appState.canvas.height = containerHeight;
+
+    const m = getFitMetrics();
+    logDebug(`Canvasリサイズ: ${containerWidth}x${containerHeight} (Video: ${vWidth}x${vHeight}, fit: ${m.fit.toFixed(3)})`);
+
     drawVideoFrame();
 }
 
@@ -622,12 +681,13 @@ function drawVideoFrame() {
     appState.ctx.clearRect(0, 0, appState.canvas.width, appState.canvas.height);
     
     appState.ctx.save();
-    // アフィン変換の適用
+    // アフィン変換の適用（ユーザーのズーム・パン）
     appState.ctx.translate(appState.viewState.offsetX, appState.viewState.offsetY);
     appState.ctx.scale(appState.viewState.scale, appState.viewState.scale);
-    
-    // 動画フレームの描画
-    appState.ctx.drawImage(appState.videoElement, 0, 0, appState.canvas.width, appState.canvas.height);
+
+    // 動画フレームの描画（コンテナ内にレターボックス配置）
+    const m = getFitMetrics();
+    appState.ctx.drawImage(appState.videoElement, m.baseX, m.baseY, m.fitW, m.fitH);
     
     // キャリブレーションマーカーとトラックポイントの描画
     drawCalibrationMarkers();
@@ -687,38 +747,37 @@ function drawReticlePath(ctx, cx, cy) {
 }
 
 // --- 座標変換関数 ---
+// Canvas はコンテナ全面サイズ。動画はその中にレターボックス配置（contain-fit・中央寄せ）。
+// fit と base(余白) を毎回算出することで状態を持たず、テストでも純粋に検証できる。
+function getFitMetrics() {
+    const vW = (appState.videoElement && appState.videoElement.videoWidth) || 1;
+    const vH = (appState.videoElement && appState.videoElement.videoHeight) || 1;
+    const cW = (appState.canvas && appState.canvas.width) || 1;
+    const cH = (appState.canvas && appState.canvas.height) || 1;
+    const fit = Math.min(cW / vW, cH / vH) || 1;
+    const fitW = vW * fit, fitH = vH * fit;
+    return { fit, fitW, fitH, baseX: (cW - fitW) / 2, baseY: (cH - fitH) / 2, vW, vH, cW, cH };
+}
+
 function canvasToVideo(cx, cy) {
+    const m = getFitMetrics();
     const lx = (cx - appState.viewState.offsetX) / appState.viewState.scale;
     const ly = (cy - appState.viewState.offsetY) / appState.viewState.scale;
-    
-    const vWidth = appState.videoElement ? appState.videoElement.videoWidth : 1;
-    const vHeight = appState.videoElement ? appState.videoElement.videoHeight : 1;
-    const cWidth = appState.canvas ? appState.canvas.width : 1;
-    const cHeight = appState.canvas ? appState.canvas.height : 1;
-    
-    const vx = lx * (vWidth / cWidth);
-    const vy = ly * (vHeight / cHeight);
-    return { x: vx, y: vy };
+    return { x: (lx - m.baseX) / m.fit, y: (ly - m.baseY) / m.fit };
 }
 
 function videoToCanvas(vx, vy) {
     const local = videoToLocalCanvas(vx, vy);
-    
+
     const cx = local.x * appState.viewState.scale + appState.viewState.offsetX;
     const cy = local.y * appState.viewState.scale + appState.viewState.offsetY;
     return { x: cx, y: cy };
 }
 
-// 動画座標からCanvasローカル座標([0, canvas.width] x [0, canvas.height])へのスケール変換
+// 動画座標 → Canvasローカル座標（ユーザーズーム適用前。レターボックスの余白を含む）
 function videoToLocalCanvas(vx, vy) {
-    const vWidth = appState.videoElement ? appState.videoElement.videoWidth : 1;
-    const vHeight = appState.videoElement ? appState.videoElement.videoHeight : 1;
-    const cWidth = appState.canvas ? appState.canvas.width : 1;
-    const cHeight = appState.canvas ? appState.canvas.height : 1;
-    
-    const lx = vx * (cWidth / vWidth);
-    const ly = vy * (cHeight / vHeight);
-    return { x: lx, y: ly };
+    const m = getFitMetrics();
+    return { x: m.baseX + vx * m.fit, y: m.baseY + vy * m.fit };
 }
 
 // --- Pointer Events によるズーム・パン、ドラッグ ---
@@ -1022,7 +1081,7 @@ function captureTrackPoint(vPos) {
     const newPoint = {
         id: Date.now(),
         frame: appState.currentFrame,
-        time: appState.currentFrame / appState.videoFps,
+        time: frameTimeOf(appState.currentFrame),
         x: vPos.x,
         y: vPos.y,
         objectId: appState.activeObjectId
@@ -1245,7 +1304,7 @@ function trackColorStep() {
                 const newPoint = {
                     id: Date.now(),
                     frame: appState.currentFrame,
-                    time: appState.currentFrame / appState.videoFps,
+                    time: frameTimeOf(appState.currentFrame),
                     x: nextX,
                     y: nextY,
                     objectId: appState.activeObjectId
@@ -1539,33 +1598,65 @@ function computeKinematics(sortedData) {
     }));
 }
 
-// --- リアルタイムグラフの描画 ---
-let graphPlotPoints = []; // クリック当たり判定用に最後の描画座標を保持
+// --- リアルタイムグラフ（複数表示・縦積み） ---
+const GRAPH_TYPES_KEY = 'tracker_for_ipad_graph_types_v1';
+const DEFAULT_GRAPH_TYPES = ['y-t', 'v-t'];
+let renderedGraphSignature = null; // 現在 DOM 上に組まれているグラフ種別の署名
+
+function getSelectedGraphTypes() {
+    const sel = [];
+    document.querySelectorAll('#graph-type-checklist input[type="checkbox"]').forEach(b => {
+        if (b.checked) sel.push(b.value);
+    });
+    return sel;
+}
+
+function persistGraphTypes(types) {
+    try { localStorage.setItem(GRAPH_TYPES_KEY, JSON.stringify(types)); } catch (e) { /* 無視 */ }
+}
+
+function loadGraphTypes() {
+    try {
+        const raw = localStorage.getItem(GRAPH_TYPES_KEY);
+        if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) return a; }
+    } catch (e) { /* 破損は無視 */ }
+    return DEFAULT_GRAPH_TYPES.slice();
+}
 
 function setupGraphEvents() {
-    const selector = document.getElementById('graph-type-select');
-    if (selector) selector.addEventListener('change', updateGraph);
+    const checklist = document.getElementById('graph-type-checklist');
+    if (!checklist) return;
+    // 前回の選択（無ければデフォルト y-t / v-t）をチェック状態へ反映
+    const saved = loadGraphTypes();
+    checklist.querySelectorAll('input[type="checkbox"]').forEach(b => {
+        b.checked = saved.includes(b.value);
+    });
+    checklist.addEventListener('change', () => {
+        persistGraphTypes(getSelectedGraphTypes());
+        updateGraph();
+    });
+}
 
-    const graphCanvas = document.getElementById('graph-canvas');
-    if (graphCanvas) {
-        graphCanvas.addEventListener('click', (e) => {
-            const rect = graphCanvas.getBoundingClientRect();
-            const mx = (e.clientX - rect.left) * (graphCanvas.width / (rect.width || 1));
-            const my = (e.clientY - rect.top) * (graphCanvas.height / (rect.height || 1));
-            let best = null, bestDist = 16;
-            graphPlotPoints.forEach(p => {
-                const d = Math.hypot(p.cx - mx, p.cy - my);
-                if (d < bestDist) { bestDist = d; best = p; }
-            });
-            if (best) {
-                setSelectedPoint(best.id);
-                seekToFrame(best.frame);
-                drawVideoFrame();
-                updateDataTable();
-                updateGraph();
-            }
+// 1枚のグラフ canvas にクリックハンドラを取り付ける（当たり判定座標は canvas._plotPoints）
+function attachGraphClick(cv) {
+    cv.addEventListener('click', (e) => {
+        const pts = cv._plotPoints || [];
+        const rect = cv.getBoundingClientRect();
+        const mx = (e.clientX - rect.left) * (cv.width / (rect.width || 1));
+        const my = (e.clientY - rect.top) * (cv.height / (rect.height || 1));
+        let best = null, bestDist = 16;
+        pts.forEach(p => {
+            const d = Math.hypot(p.cx - mx, p.cy - my);
+            if (d < bestDist) { bestDist = d; best = p; }
         });
-    }
+        if (best) {
+            setSelectedPoint(best.id);
+            seekToFrame(best.frame);
+            drawVideoFrame();
+            updateDataTable();
+            updateGraph();
+        }
+    });
 }
 
 // グラフ種別 → 系列の定義（速度・加速度を含む）
@@ -1585,10 +1676,49 @@ function graphSeriesFor(graphType, kin, unit) {
     return map[graphType] || map['y-t'];
 }
 
+// 選択されたグラフ種別ぶんのミニ canvas を縦積みし、それぞれ描画する。
 function updateGraph() {
-    const graphCanvas = document.getElementById('graph-canvas');
-    if (!graphCanvas) return;
+    const stack = document.getElementById('graph-stack');
+    if (!stack) return;
 
+    const types = getSelectedGraphTypes();
+    const sig = types.join(',');
+
+    // 選択が変わったときだけ DOM を組み直す（毎回の再描画では作り直さない）
+    if (sig !== renderedGraphSignature) {
+        stack.innerHTML = '';
+        if (types.length === 0) {
+            const hint = document.createElement('div');
+            hint.className = 'graph-empty-hint';
+            hint.textContent = '上のチェックで表示する量を選んでください';
+            stack.appendChild(hint);
+        } else {
+            types.forEach(type => {
+                const box = document.createElement('div');
+                box.className = 'mini-graph';
+                const cv = document.createElement('canvas');
+                cv.dataset.type = type;
+                box.appendChild(cv);
+                stack.appendChild(box);
+                attachGraphClick(cv);
+            });
+        }
+        renderedGraphSignature = sig;
+    }
+
+    const data = appState.trackingData
+        .filter(p => p.objectId === appState.activeObjectId)
+        .sort((a, b) => a.frame - b.frame);
+    const unit = appState.calibration.scaleRatio ? "cm" : "px";
+    const kin = data.length ? computeKinematics(data) : [];
+
+    stack.querySelectorAll('canvas').forEach(cv => {
+        drawOneGraph(cv, cv.dataset.type, data, kin, unit);
+    });
+}
+
+// グラフ1枚を canvas に描画。当たり判定座標は cv._plotPoints に保持。
+function drawOneGraph(graphCanvas, graphType, data, kin, unit) {
     // 親要素のサイズに Canvas の物理解像度をフィットさせる
     const container = graphCanvas.parentElement;
     if (container.clientWidth > 0 && container.clientHeight > 0) {
@@ -1598,13 +1728,10 @@ function updateGraph() {
 
     const gCtx = graphCanvas.getContext('2d');
     gCtx.clearRect(0, 0, graphCanvas.width, graphCanvas.height);
-    graphPlotPoints = [];
+    const plotPoints = [];
+    graphCanvas._plotPoints = plotPoints;
 
-    const data = appState.trackingData
-        .filter(p => p.objectId === appState.activeObjectId)
-        .sort((a, b) => a.frame - b.frame);
-
-    if (data.length === 0) {
+    if (!data || data.length === 0) {
         gCtx.fillStyle = '#7A828E';
         gCtx.font = '11px IBM Plex Sans JP';
         gCtx.textAlign = 'center';
@@ -1613,9 +1740,6 @@ function updateGraph() {
         return;
     }
 
-    const graphType = document.getElementById('graph-type-select').value;
-    const unit = appState.calibration.scaleRatio ? "cm" : "px";
-    const kin = computeKinematics(data);
     const series = graphSeriesFor(graphType, kin, unit);
     const valX = series.xv, valY = series.yv;
     const labelX = series.lx, labelY = series.ly;
@@ -1718,7 +1842,7 @@ function updateGraph() {
     valX.forEach((vx, idx) => {
         const cx = toCanvasX(vx);
         const cy = toCanvasY(valY[idx]);
-        graphPlotPoints.push({ cx, cy, id: data[idx].id, frame: data[idx].frame });
+        plotPoints.push({ cx, cy, id: data[idx].id, frame: data[idx].frame });
 
         gCtx.beginPath();
         // 選択されたポイントはプロット上でも大きく＆アンバーで強調（三者連動）
@@ -1870,9 +1994,25 @@ function showInputDialog(title, bodyText, defaultValue, onOk) {
 }
 
 // --- Node.js テスト用および統合テスト用エクスポート ---
+// 内部状態をテストから差し替えるヘルパ（node・ブラウザ両方で使う）
+function test_setVars(vars) {
+    if (vars.canvas !== undefined) appState.canvas = vars.canvas;
+    if (vars.videoElement !== undefined) appState.videoElement = vars.videoElement;
+    if (vars.viewState !== undefined) appState.viewState = vars.viewState;
+    if (vars.calibration !== undefined) appState.calibration = vars.calibration;
+    if (vars.trackingData !== undefined) appState.trackingData = vars.trackingData;
+    if (vars.frameTimes !== undefined) appState.frameTimes = vars.frameTimes;
+    if (vars.videoFps !== undefined) appState.videoFps = vars.videoFps;
+    if (vars.videoDuration !== undefined) appState.videoDuration = vars.videoDuration;
+}
+
 window.canvasToVideo = canvasToVideo;
 window.videoToCanvas = videoToCanvas;
 window.videoToLocalCanvas = videoToLocalCanvas;
+window.getFitMetrics = getFitMetrics;
+window.frameTimeOf = frameTimeOf;
+window.seekTimeOf = seekTimeOf;
+window.buildFrameTimeTable = buildFrameTimeTable;
 window.seekToFrame = seekToFrame;
 window.stepFrame = stepFrame;
 window.setPendingCapture = setPendingCapture;
@@ -1882,6 +2022,7 @@ window.resetZoom = resetZoom;
 window.updateGraph = updateGraph;
 window.deletePoint = deletePoint;
 window.undo = undo;
+window.test_setVars = test_setVars;
 
 if (typeof module !== 'undefined') {
     module.exports = {
@@ -1889,15 +2030,13 @@ if (typeof module !== 'undefined') {
         canvasToVideo,
         videoToCanvas,
         videoToLocalCanvas,
+        getFitMetrics,
+        frameTimeOf,
+        seekTimeOf,
+        buildFrameTimeTable,
         seekToFrame,
         stepFrame,
         sampleColor,
-        test_setVars: (vars) => {
-            if (vars.canvas !== undefined) appState.canvas = vars.canvas;
-            if (vars.videoElement !== undefined) appState.videoElement = vars.videoElement;
-            if (vars.viewState !== undefined) appState.viewState = vars.viewState;
-            if (vars.calibration !== undefined) appState.calibration = vars.calibration;
-            if (vars.trackingData !== undefined) appState.trackingData = vars.trackingData;
-        }
+        test_setVars
     };
 }
