@@ -22,6 +22,30 @@
 | `app.js` | 解析ロジック（トラッキング/校正/FPS実測/グラフ/出力） |
 | `styles.css` | "計器/ストロボ" のビジュアル |
 | `serve.py` | ローカル開発サーバ（:8000, LAN公開, キャッシュ無効） |
-| `reference/` | 参考にした既存アプリ（IPhO2023 / Tracker Online） |
+| `test_logic.js` / `tests/e2e.test.js` / `test.html` | テスト（node ロジック / 実Chrome E2E / ブラウザ内ハーネス） |
 
-リファレンスの IPhO2023 動画解析アプリは ODA Tomohiro 氏作・CC BY-NC 4.0。
+## テスト
+依存パッケージはありません。
+
+- `npm test` … node によるロジック単体テスト
+- `node tests/e2e.test.js` … 既存 Chrome を DevTools Protocol で駆動する E2E（動画を実デコードして検証）
+- `test.html` … `python serve.py` 後にブラウザ（iPad/Safari 可）で開いて目視
+
+## ライセンス
+本リポジトリのコード（`index.html` / `app.js` / `styles.css` / `serve.py` / テスト類）は
+**Creative Commons 表示-非営利 4.0 国際（CC BY-NC 4.0）** で公開します。© 2026 phys-ken。
+全文は [LICENSE](LICENSE) を参照。商用利用を希望される場合は作者へご連絡ください。
+
+実行時に CDN から読み込む外部ライブラリ（本リポジトリには同梱しません）:
+- Google Fonts（IBM Plex Sans JP / Mono）・Material Icons — SIL OFL / Apache License 2.0
+- SheetJS (xlsx) — Apache License 2.0
+
+## クレジット / 謝辞
+本アプリは独立実装ですが、設計・概念の面で次の優れた先行ソフトウェアから着想を得ました。
+**コードの流用はありません。** これらのリファレンス・ファイルは本リポジトリには含めていません。
+
+- **IPhO2023 記念協会「Physics Exam Lab — 動画解析アプリ」**（作: ODA Tomohiro）
+  © 2025 一般社団法人 国際物理オリンピック2023記念協会 — CC BY-NC 4.0
+  <https://apps.ipho2023-commemorative-association.jp/動画解析アプリ>
+- **Open Source Physics「Tracker」/「Tracker Online」**（作: Douglas Brown, OSP / AAPT-ComPADRE）
+  GNU General Public License — <https://opensourcephysics.github.io/tracker-website/>

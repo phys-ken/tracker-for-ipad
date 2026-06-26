@@ -1,0 +1,16 @@
+# 第三者コード（CC BY-NC の IPhO アプリ / GPL の Tracker）— 概念参考用にローカル保管のみ。公開しない。
+reference/
+
+# 診断用の一時スクショ（意図的な公開アセットではない）
+image.png
+
+# Node / テスト
+node_modules/
+package-lock.json
+
+# Chrome ヘッドレス E2E の一時生成物
+DevToolsActivePort
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
