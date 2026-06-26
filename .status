@@ -1,10 +1,12 @@
 # Project Status File
 # LLM・AIエージェントが定期レビューに使うファイルです。git 管理対象です。
-status: develop
+status: published
 created: 2026-06-25
 description: 動画から運動(位置/速度/加速度)を測る iPad向け解析ツール。中央十字＋確定方式。
-github:
-last_reviewed: 2026-06-25
+github: https://github.com/phys-ken/tracker-for-ipad
+pages: https://phys-ken.github.io/tracker-for-ipad/
+license: CC BY-NC 4.0
+last_reviewed: 2026-06-26
 notes: >
   低級LLM版を全面改修。Stage1=中央十字＋確定/校正バグ修正/下部固定バー、
   Stage2=FPS実測(rVFC)＋読込プレビュー、Stage3=速度/加速度グラフ＋連動＋TSV/xlsx出力、
