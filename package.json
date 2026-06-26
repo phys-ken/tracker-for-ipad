@@ -1,0 +1,11 @@
+{
+  "name": "tracker_for_ipad",
+  "version": "1.0.0",
+  "private": true,
+  "description": "動画解析トラッカー（iPad向け）。テストは依存ゼロ：node 標準機能と既存 Chrome のみで動く。",
+  "scripts": {
+    "test": "node test_logic.js",
+    "test:e2e": "node tests/e2e.test.js",
+    "test:all": "node test_logic.js && node tests/e2e.test.js"
+  }
+}

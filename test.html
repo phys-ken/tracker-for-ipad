@@ -163,191 +163,228 @@
             testGroups.push({ name, cases });
         }
 
-        // --- フェーズ1: 動画ロードとフレーム送り ---
-        addTestGroup("フェーズ1: 動画ロードとフレーム送り", [
+        const wait = (ms) => new Promise(r => setTimeout(r, ms));
+        async function waitFor(cond, timeoutMs, label) {
+            const t0 = Date.now();
+            while (Date.now() - t0 < timeoutMs) { if (cond()) return; await wait(120); }
+            throw new Error('タイムアウト: ' + (label || 'condition'));
+        }
+        // seeked を待つ（同一時刻でseekedが来ない場合に備えてタイムアウト併用）
+        function seekAndWait(win, n, timeoutMs = 2000) {
+            return new Promise(resolve => {
+                const v = win.appState.videoElement;
+                let done = false;
+                const h = () => { if (done) return; done = true; v.removeEventListener('seeked', h); resolve(); };
+                v.addEventListener('seeked', h);
+                win.seekToFrame(n);
+                setTimeout(() => { if (!done) { done = true; v.removeEventListener('seeked', h); resolve(); } }, timeoutMs);
+            });
+        }
+
+        // --- フェーズ1: 実動画ロードとフレーム時刻表 ---
+        addTestGroup("フェーズ1: 実動画ロードとフレーム時刻表", [
             {
-                name: "動画要素とCanvas要素が存在すること",
+                name: "appState / video / canvas 要素が存在すること",
                 fn: async (win) => {
-                    assert(win.appState, "appStateオブジェクトが存在すること");
-                    assert(win.appState.videoElement, "videoElementが定義されていること");
-                    assert(win.appState.canvas, "canvasが定義されていること");
-                    assert(win.appState.ctx, "Canvas 2D contextが定義されていること");
+                    assert(win.appState, "appStateが存在");
+                    assert(win.appState.videoElement, "videoElementが存在");
+                    assert(win.appState.canvas && win.appState.ctx, "canvas/ctxが存在");
                 }
             },
             {
-                name: "デフォルト動画(sample.mp4)のロード完了を待つ",
+                name: "サンプル動画を読み込みデコード完了を待つ",
                 fn: async (win) => {
-                    return new Promise((resolve, reject) => {
-                        let attempts = 0;
-                        const check = () => {
-                            attempts++;
-                            if (win.appState.videoElement.readyState >= 2 && win.appState.videoElement.duration > 0) {
-                                log(`動画ロード完了! 長さ: ${win.appState.videoElement.duration.toFixed(2)}s`);
-                                resolve();
-                            } else if (attempts > 50) {
-                                reject(new Error("動画のロードがタイムアウトしました。"));
-                            } else {
-                                setTimeout(check, 100);
-                            }
-                        };
-                        check();
-                    });
+                    win.document.getElementById('btn-load-sample').click();
+                    await waitFor(() => win.appState.videoElement.readyState >= 2 && win.appState.videoDuration > 0, 20000, '動画メタデータ');
+                    log(`動画ロード完了: ${win.appState.videoElement.videoWidth}x${win.appState.videoElement.videoHeight}, ${win.appState.videoDuration.toFixed(2)}s`);
                 }
             },
             {
-                name: "初期フレームが0であること",
+                name: "プレビュー再生＋FPS実測＋フレーム時刻表の構築を待つ",
                 fn: async (win) => {
-                    assertEq(win.appState.currentFrame, 0, "初期フレームは0");
-                    const label = win.document.getElementById('lbl-frame').textContent;
-                    assertEq(parseInt(label), 0, "フレームラベルの初期値は0");
+                    await waitFor(() => win.appState.isPreviewing === false && win.appState.totalFrames > 0, 25000, 'プレビュー完了');
+                    log(`fps=${win.appState.videoFps}, totalFrames=${win.appState.totalFrames}, frameTimes=${win.appState.frameTimes.length}`);
+                    assert(win.appState.frameTimes.length >= 11, "実フレーム時刻表が構築されていること");
+                    assertEq(win.appState.totalFrames, win.appState.frameTimes.length - 1, "totalFrames=frameTimes.length-1 (コマと1:1)");
                 }
             },
             {
-                name: "1フレーム進む",
+                name: "プレビュー後は先頭フレーム(0)に戻ること",
                 fn: async (win) => {
-                    win.stepFrame(1);
-                    await new Promise(r => setTimeout(r, 100));
-                    assertEq(win.appState.currentFrame, 1, "currentFrameが1に更新されること");
+                    assertEq(win.appState.currentFrame, 0, "currentFrameが0");
                 }
             },
             {
-                name: "10フレーム進む",
+                name: "フレーム送りでコマ時刻が単調増加すること（重複なし）",
                 fn: async (win) => {
-                    win.stepFrame(10);
-                    await new Promise(r => setTimeout(r, 100));
-                    assertEq(win.appState.currentFrame, 11, "currentFrameが11になること");
+                    let prev = -1;
+                    for (let n = 0; n <= win.appState.totalFrames; n++) {
+                        await seekAndWait(win, n);
+                        const t = win.frameTimeOf(n);
+                        assert(t > prev, `frame ${n} の時刻 ${t.toFixed(4)} が直前より大きい（末尾重複なし）`);
+                        prev = t;
+                    }
                 }
             },
             {
-                name: "シーク境界値チェック",
+                name: "シーク境界クランプ",
                 fn: async (win) => {
-                    win.seekToFrame(-5);
-                    await new Promise(r => setTimeout(r, 100));
-                    assertEq(win.appState.currentFrame, 0, "0未満は0に丸められること");
-                    
-                    win.seekToFrame(win.appState.totalFrames + 10);
-                    await new Promise(r => setTimeout(r, 100));
-                    assertEq(win.appState.currentFrame, win.appState.totalFrames, "最大フレーム超過は最大値に丸められること");
+                    await seekAndWait(win, -5);
+                    assertEq(win.appState.currentFrame, 0, "0未満は0");
+                    await seekAndWait(win, win.appState.totalFrames + 10);
+                    assertEq(win.appState.currentFrame, win.appState.totalFrames, "超過は最大値");
+                    await seekAndWait(win, 0);
                 }
             }
         ]);
 
-        // --- フェーズ2: ズーム・パンと座標変換 ---
-        addTestGroup("フェーズ2: ズーム・パンと座標変換", [
+        // --- フェーズ2: 主要動線（原点・スケール・トラック・出力） ---
+        addTestGroup("フェーズ2: 主要動線（原点/スケール/トラック/出力）", [
+            {
+                name: "原点を設定できること",
+                fn: async (win) => {
+                    win.setPendingCapture('origin');
+                    win.confirmAtCrosshair();
+                    assert(!!win.appState.calibration.origin, "原点が設定されること");
+                }
+            },
+            {
+                name: "スケールを設定できること（2点＋実寸入力）",
+                fn: async (win) => {
+                    win.setPendingCapture('scale');
+                    win.confirmAtCrosshair();
+                    win.appState.viewState.offsetX -= 200; // 十字が指す動画座標をずらす
+                    win.confirmAtCrosshair();
+                    const inp = win.document.getElementById('dialog-input-val');
+                    assert(!!inp, "スケール入力ダイアログが出ること");
+                    inp.value = '50';
+                    win.document.getElementById('dialog-btn-ok').click();
+                    win.resetZoom();
+                    const r = win.appState.calibration.scaleRatio;
+                    assert(isFinite(r) && r > 0, `scaleRatioが正の有限値 (${r ? r.toFixed(4) : 'n/a'} cm/px)`);
+                }
+            },
+            {
+                name: "トラック点を確定で登録できること（自動コマ送り）",
+                fn: async (win) => {
+                    win.test_setVars({ trackingData: [] });
+                    await seekAndWait(win, 0);
+                    win.setPendingCapture(null);
+                    for (let k = 0; k < 4; k++) { win.confirmAtCrosshair(); await wait(120); }
+                    assert(win.appState.trackingData.length >= 3, `点が複数登録される (${win.appState.trackingData.length}点)`);
+                    const f0 = win.appState.trackingData[0].frame;
+                    const f1 = win.appState.trackingData[1].frame;
+                    assert(f1 > f0, "確定ごとにフレームが進む");
+                }
+            },
+            {
+                name: "選択ポイントを削除できること",
+                fn: async (win) => {
+                    const before = win.appState.trackingData.length;
+                    const id = win.appState.trackingData[0].id;
+                    win.deletePoint(id);
+                    assertEq(win.appState.trackingData.length, before - 1, "1点削除されること");
+                }
+            },
+            {
+                name: "データ表ヘッダがスケール設定後 cm 表記になること",
+                fn: async (win) => {
+                    const th = win.document.querySelectorAll('#data-table thead th')[1].textContent;
+                    assert(/cm/.test(th), `ヘッダが cm 表記 (${th})`);
+                }
+            },
+            {
+                name: "出力TSVにヘッダとデータ行が含まれること",
+                fn: async (win) => {
+                    win.document.getElementById('btn-export').click();
+                    const ta = win.document.querySelector('#dialog-body textarea');
+                    assert(!!ta, "エクスポートのテキストエリアが出ること");
+                    const tsv = ta.value;
+                    assert(/object_id\tframe/.test(tsv.split('\n')[0]), "正しいヘッダ行");
+                    assert(tsv.trim().split('\n').length >= 3, "ヘッダ＋データ行がある");
+                    win.document.getElementById('dialog-btn-cancel').click();
+                }
+            }
+        ]);
+
+        // --- フェーズ3: グラフ複数表示 ---
+        addTestGroup("フェーズ3: グラフ複数表示", [
+            {
+                name: "既定で y-t / v-t の2枚が縦積みされること",
+                fn: async (win) => {
+                    const checked = [...win.document.querySelectorAll('#graph-type-checklist input:checked')].map(b => b.value);
+                    assertEq(checked.join(','), 'y-t,v-t', "既定チェックは y-t,v-t");
+                    const types = [...win.document.querySelectorAll('#graph-stack canvas')].map(c => c.dataset.type);
+                    assertEq(types.join(','), 'y-t,v-t', "ミニグラフが2枚 (y-t,v-t)");
+                }
+            },
+            {
+                name: "チェック追加でグラフが増えること",
+                fn: async (win) => {
+                    const ax = win.document.querySelector('#graph-type-checklist input[value="a-t"]');
+                    ax.checked = true; ax.dispatchEvent(new Event('change', { bubbles: true }));
+                    const types = [...win.document.querySelectorAll('#graph-stack canvas')].map(c => c.dataset.type);
+                    assertEq(types.length, 3, "3枚に増える");
+                    assertEq(types[2], 'a-t', "末尾が a-t");
+                    ax.checked = false; ax.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+        ]);
+
+        // --- フェーズ4: 座標変換・レターボックス（純粋計算。最後に実行：videoElementをスタブ化するため） ---
+        addTestGroup("フェーズ4: 座標変換・レターボックス（純粋計算）", [
             {
                 name: "ズームリセットが動作すること",
                 fn: async (win) => {
                     win.appState.viewState = { scale: 2, offsetX: 100, offsetY: 50 };
                     win.resetZoom();
-                    assertEq(win.appState.viewState.scale, 1, "scaleが1に戻ること");
-                    assertEq(win.appState.viewState.offsetX, 0, "offsetXが0に戻ること");
-                    assertEq(win.appState.viewState.offsetY, 0, "offsetYが0に戻ること");
+                    assertEq(win.appState.viewState.scale, 1, "scale=1");
+                    assertEq(win.appState.viewState.offsetX, 0, "offsetX=0");
+                    assertEq(win.appState.viewState.offsetY, 0, "offsetY=0");
                 }
             },
             {
-                name: "アフィン変換座標変換 (1倍・オフセット0)",
-                fn: async (win) => {
-                    win.resetZoom();
-                    win.test_setVars({
-                        canvas: { width: 800, height: 600 },
-                        videoElement: { videoWidth: 1600, videoHeight: 1200 }
-                    });
-                    
-                    const vPos = win.canvasToVideo(400, 300);
-                    assertClose(vPos.x, 800, 0.1, "Canvas(400, 300) -> Video(800, 600)");
-                    assertClose(vPos.y, 600, 0.1, "Canvas(400, 300) -> Video(800, 600)");
-                    
-                    const cPos = win.videoToCanvas(800, 600);
-                    assertClose(cPos.x, 400, 0.1, "Video(800, 600) -> Canvas(400, 300)");
-                    assertClose(cPos.y, 300, 0.1, "Video(800, 600) -> Canvas(400, 300)");
-                }
-            },
-            {
-                name: "アフィン変換座標変換 (2倍・パンあり)",
+                name: "アスペクト一致（余白0）の往復変換",
                 fn: async (win) => {
                     win.test_setVars({
                         canvas: { width: 800, height: 600 },
                         videoElement: { videoWidth: 1600, videoHeight: 1200 },
-                        viewState: { scale: 2, offsetX: 100, offsetY: 50 }
+                        viewState: { scale: 1, offsetX: 0, offsetY: 0 }
                     });
-                    
-                    const cPos = win.videoToCanvas(0, 0);
-                    assertClose(cPos.x, 100, 0.1, "Video(0,0) -> Canvas(100,50)");
-                    assertClose(cPos.y, 50, 0.1, "Video(0,0) -> Canvas(100,50)");
-                    
-                    const vPos = win.canvasToVideo(100, 50);
-                    assertClose(vPos.x, 0, 0.1, "Canvas(100,50) -> Video(0,0)");
-                    assertClose(vPos.y, 0, 0.1, "Canvas(100,50) -> Video(0,0)");
-                }
-            }
-        ]);
-
-        // --- フェーズ3 & 4: トラッキングデータと微調整 ---
-        addTestGroup("フェーズ3 & 4: トラックポイント登録と削除", [
-            {
-                name: "ポイントの追加と削除",
-                fn: async (win) => {
-                    win.test_setVars({ trackingData: [] });
-                    win.seekToFrame(10);
-                    
-                    win.setAppMode('track');
-                    const canvasEl = win.document.getElementById('tracker-canvas');
-                    const rect = canvasEl.getBoundingClientRect();
-                    
-                    const e = {
-                        clientX: rect.left + 100,
-                        clientY: rect.top + 100,
-                        preventDefault: () => {}
-                    };
-                    win.handleCanvasClick(e);
-                    
-                    assert(win.appState.trackingData.length > 0, "ポイントデータが1個以上登録されていること");
-                    const pt = win.appState.trackingData[0];
-                    assertEq(pt.frame, 10, "登録されたフレーム番号が10であること");
-                    
-                    win.deletePoint(pt.id);
-                    assertEq(win.appState.trackingData.length, 0, "削除後にデータ件数が0になること");
-                }
-            }
-        ]);
-
-        // --- フェーズ5: キャリブレーションと物理座標変換 ---
-        addTestGroup("フェーズ5: キャリブレーションと物理座標変換", [
-            {
-                name: "原点設定による座標オフセット",
-                fn: async (win) => {
-                    win.test_setVars({
-                        calibration: {
-                            origin: { x: 500, y: 500 },
-                            scaleRatio: null
-                        }
-                    });
-                    
-                    const pt = { x: 600, y: 400 };
-                    
-                    let physX = pt.x - win.appState.calibration.origin.x;
-                    let physY = win.appState.calibration.origin.y - pt.y;
-                    
-                    assertEq(physX, 100, "物理X座標が+100であること");
-                    assertEq(physY, 100, "物理Y座標が+100であること");
+                    const vPos = win.canvasToVideo(400, 300);
+                    assertClose(vPos.x, 800, 0.1, "Canvas(400,300)→Video(800,600) X");
+                    assertClose(vPos.y, 600, 0.1, "Canvas(400,300)→Video(800,600) Y");
+                    const cPos = win.videoToCanvas(800, 600);
+                    assertClose(cPos.x, 400, 0.1, "逆変換 X");
+                    assertClose(cPos.y, 300, 0.1, "逆変換 Y");
                 }
             },
             {
-                name: "スケール倍率による物理単位変換(cm)",
+                name: "縦長動画のレターボックス（横幅の中央を使える）",
                 fn: async (win) => {
                     win.test_setVars({
-                        calibration: {
-                            origin: { x: 500, y: 500 },
-                            scaleRatio: 2.5
-                        }
+                        canvas: { width: 1000, height: 400 },
+                        videoElement: { videoWidth: 1080, videoHeight: 1920 },
+                        viewState: { scale: 1, offsetX: 0, offsetY: 0 }
                     });
-                    
+                    const m = win.getFitMetrics();
+                    assertClose(m.fit, 400 / 1920, 0.0001, "fitは高さ基準");
+                    assert(m.baseX > 0, "左右に余白(baseX>0)");
+                    assertClose(m.baseY, 0, 0.01, "上下の余白は0");
+                    const cPos = win.videoToCanvas(540, 960);
+                    assertClose(cPos.x, 500, 0.1, "動画中央→Canvas中央 X (横幅中央)");
+                    assertClose(cPos.y, 200, 0.1, "動画中央→Canvas中央 Y");
+                }
+            },
+            {
+                name: "物理座標変換（原点オフセット＋スケール cm）",
+                fn: async (win) => {
+                    win.test_setVars({ calibration: { origin: { x: 500, y: 500 }, scaleRatio: 2.5 } });
                     const pt = { x: 600, y: 400 };
-                    let physX = (pt.x - win.appState.calibration.origin.x) * win.appState.calibration.scaleRatio;
-                    let physY = (win.appState.calibration.origin.y - pt.y) * win.appState.calibration.scaleRatio;
-                    
-                    assertClose(physX, 250, 0.1, "物理Xが 250cm に変換されること");
-                    assertClose(physY, 250, 0.1, "物理Yが 250cm に変換されること");
+                    const physX = (pt.x - win.appState.calibration.origin.x) * win.appState.calibration.scaleRatio;
+                    const physY = (win.appState.calibration.origin.y - pt.y) * win.appState.calibration.scaleRatio;
+                    assertClose(physX, 250, 0.1, "物理X=250cm");
+                    assertClose(physY, 250, 0.1, "物理Y=250cm (Y軸反転)");
                 }
             }
         ]);
