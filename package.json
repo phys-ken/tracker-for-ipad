@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node test_logic.js",
     "test:e2e": "node tests/e2e.test.js",
-    "test:all": "node test_logic.js && node tests/e2e.test.js"
+    "test:precision": "node tests/precision.test.js",
+    "test:all": "node test_logic.js && node tests/e2e.test.js && node tests/precision.test.js"
   }
 }

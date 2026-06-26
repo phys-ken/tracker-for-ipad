@@ -11,7 +11,7 @@ const appState = {
     videoFps: 30,
     fpsMeasured: false,    // 実測FPSが確定したか
     fpsManual: false,      // ユーザーが手動でFPSを上書きしたか
-    isPreviewing: false,   // 読込直後のプレビュー再生中か
+    isScanning: false,     // 読込直後のフレーム走査中か
     currentFrame: 0,
     totalFrames: 0,
     frameTimes: [],        // 実測した各フレームの提示時刻(mediaTime)。空ならfps換算にフォールバック
@@ -304,8 +304,8 @@ function setupFileUpload() {
         updateGraph();
         updateStepGuide();
 
-        // 読込直後に1回プレビュー再生し、その間に実FPSを測定して先頭へ戻る
-        startPreviewAndMeasureFps();
+        // 読込直後に全フレームをシーク走査し、実フレーム時刻表＋重複除外を確定して先頭へ
+        startFrameScan();
     });
     
     appState.videoElement.addEventListener('canplay', () => {
@@ -314,6 +314,7 @@ function setupFileUpload() {
     });
     
     appState.videoElement.addEventListener('seeked', () => {
+        if (appState.isScanning) return; // 走査中の大量シークでは本描画をスキップ（高速化）
         updateOffscreenCanvas();
         drawVideoFrame();
         updateTimeDisplay();
@@ -326,108 +327,222 @@ function setupFileUpload() {
     });
 }
 
-// --- FPS実測 ＆ 読込直後プレビュー -----------------------------------------
-// requestVideoFrameCallback でフレーム提示時刻を測り、実FPSを確定する。
-// 同時に動画を1回プレビュー再生し、終わったら（または停止されたら）先頭に戻る。
-let previewSamples = [];
-let previewFrameTimes = [];   // プレビュー中に観測した各フレームの mediaTime
-let previewLastMediaTime = null;
+// --- フレーム走査（fps非依存の実フレーム時刻表＋重複除外） -----------------
+// 動画をシークして全フレームの実時刻(mediaTime)を取得し、重複フレームを除外する。
+// 再生せずシークするので高fps(スロー)でもコマ脱落しない。rVFC非対応の古い端末
+// （格安スマホ等）では (frame+0.5)/fps の換算へ優雅に劣化し、壊れない。
 let rvfcSupported = typeof HTMLVideoElement !== 'undefined'
     && 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+// テスト用：rVFC非対応端末（古い格安スマホ等）を擬似的に再現する
+if (typeof window !== 'undefined') window.__setRvfc = (b) => { rvfcSupported = !!b; };
 
-function startPreviewAndMeasureFps() {
-    const v = appState.videoElement;
-    if (!v || v.readyState < 1) return;
-
-    previewSamples = [];
-    previewFrameTimes = [];
-    previewLastMediaTime = null;
-    appState.isPreviewing = true;
-
-    const onPreviewEnded = () => {
-        v.removeEventListener('ended', onPreviewEnded);
-        finalizePreview(true); // 末尾まで再生 → 先頭へ戻す
-    };
-    v.addEventListener('ended', onPreviewEnded);
-
-    // rVFC でフレーム間隔を測定（対応ブラウザのみ）
-    if (rvfcSupported && !appState.fpsManual) {
-        const onFrame = (now, meta) => {
-            previewFrameTimes.push(meta.mediaTime);
-            if (previewLastMediaTime !== null) {
-                const dt = meta.mediaTime - previewLastMediaTime;
-                if (dt > 0.0003 && dt < 1) previewSamples.push(dt);
-            }
-            previewLastMediaTime = meta.mediaTime;
-            if (appState.isPreviewing && !v.paused && !v.ended) {
-                v.requestVideoFrameCallback(onFrame);
-            }
-        };
-        v.requestVideoFrameCallback(onFrame);
+// 走査用の縮小キャンバス（重複判定の画素比較に使用）
+let scanCanvas = null, scanCtx = null;
+const SCAN_W = 160, SCAN_H = 90;
+function frameSignature(v) {
+    if (!scanCanvas) {
+        scanCanvas = document.createElement('canvas');
+        scanCanvas.width = SCAN_W; scanCanvas.height = SCAN_H;
+        scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
     }
-
-    // ミュート再生（iPad/Safariでも playsinline muted なら自動再生可）
-    v.currentTime = 0;
-    const p = v.play();
-    if (p && p.catch) {
-        p.then(() => { appState.isPlaying = true; setPlayPauseIcon(true); requestAnimationFrame(renderLoop); })
-         .catch(() => { logDebug('自動プレビュー再生は不可。先頭フレームを表示します。'); finalizePreview(true); });
-    } else {
-        appState.isPlaying = true; setPlayPauseIcon(true); requestAnimationFrame(renderLoop);
+    try { scanCtx.drawImage(v, 0, 0, SCAN_W, SCAN_H); }
+    catch (e) { return null; }
+    return scanCtx.getImageData(0, 0, SCAN_W, SCAN_H).data;
+}
+// 2フレーム間で「明確に変化した画素」の割合(0..1)。真の複製はほぼ0。
+// 局所的な小さな動き（小さなボールが1px動く等）でも、その周辺の画素は変化するので拾える。
+function changedFraction(a, b) {
+    if (!a || !b || a.length !== b.length) return 1;
+    let changed = 0; const n = a.length / 4;
+    for (let i = 0; i < a.length; i += 4) {
+        const d = Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+        if (d > 24) changed++;
     }
-    logDebug('プレビュー再生＋FPS実測を開始しました。');
+    return changed / n;
+}
+const DUP_FRACTION = 0.0008;  // 変化画素 < 0.08% ＝ ほぼ画素一致 ＝ エンコード複製
+const DUP_SAFETY_MAX = 0.20;  // 全体の20%超が複製判定なら誤検出とみなし、除外しない
+
+// シークして「表示されたフレーム」の mediaTime と署名を返す
+function getFrameAt(v, targetTime) {
+    return new Promise(resolve => {
+        let done = false;
+        const finish = (mt) => { if (done) return; done = true; resolve({ mediaTime: mt, sig: frameSignature(v) }); };
+        if (rvfcSupported) {
+            v.requestVideoFrameCallback((now, meta) => finish(meta.mediaTime));
+        } else {
+            const onSeeked = () => { v.removeEventListener('seeked', onSeeked); finish(v.currentTime); };
+            v.addEventListener('seeked', onSeeked);
+        }
+        v.currentTime = Math.max(0, Math.min((v.duration || 0) - 1e-4, targetTime));
+        setTimeout(() => finish(v.currentTime), 2500); // 安全網（応答が無い端末向け）
+    });
 }
 
-// プレビュー終了処理。returnToStart=true なら先頭フレームへ。
-function finalizePreview(returnToStart) {
-    if (!appState.isPreviewing) return;
-    appState.isPreviewing = false;
+// 進捗表示（ダイアログではなくヒントオーバーレイをインライン流用）
+function showScanProgress(ratio) {
+    const o = document.getElementById('hint-overlay');
+    if (!o) return;
+    o.style.opacity = '1';
+    const pct = Math.round(Math.max(0, Math.min(1, ratio)) * 100);
+    const p = o.querySelector('p');
+    if (p) p.textContent = `解析準備中… ${pct}%`;
+    const icon = o.querySelector('.material-icons-round');
+    if (icon) icon.textContent = 'hourglass_top';
+}
+function hideScanProgress() {
+    const o = document.getElementById('hint-overlay');
+    if (o) o.style.opacity = '0';
+}
 
+// 読込直後に呼ばれる。全フレームを走査して時刻表を作る。
+async function startFrameScan() {
     const v = appState.videoElement;
-    v.pause();
-    appState.isPlaying = false;
-    setPlayPauseIcon(false);
-
-    // FPSを確定（実測サンプルが十分あれば）
-    if (!appState.fpsManual && previewSamples.length >= 4) {
-        const fps = fpsFromSamples(previewSamples);
-        if (fps) {
-            appState.videoFps = fps;
-            appState.fpsMeasured = true;
-            appState.totalFrames = Math.max(0, Math.floor(appState.videoDuration * fps));
-            logDebug(`実測FPS: ${fps}（${previewSamples.length}フレームから推定）`);
-        }
+    if (!v || v.readyState < 1) return;
+    if (appState.fpsManual) { // 手動fps指定時は走査せず換算
+        appState.frameTimes = [];
+        appState.totalFrames = Math.max(0, Math.floor(appState.videoDuration * appState.videoFps));
+        seekToFrame(0); return;
     }
+    appState.isScanning = true;
+    showScanProgress(0);
+    let result = null;
+    try { result = rvfcSupported ? await scanAllFrames(v) : await scanGridFallback(v); }
+    catch (e) { logDebug('フレーム走査に失敗: ' + (e && e.message)); }
+    appState.isScanning = false;
+    hideScanProgress();
 
-    // 実フレーム時刻表を構築（プレビュー中にほぼ全フレームを観測できた場合のみ）。
-    // これによりコマ番号→時刻のズレ（末尾の重複・先頭スキップ）が解消する。
-    if (!appState.fpsManual) {
-        const table = buildFrameTimeTable(previewFrameTimes);
-        const expected = appState.videoFps ? Math.floor(appState.videoDuration * appState.videoFps) : 0;
-        if (table.length >= 2 && (expected === 0 || table.length >= expected * 0.8)) {
-            appState.frameTimes = table;
-            appState.totalFrames = table.length - 1;
-            logDebug(`実フレーム時刻表を構築: ${table.length}フレーム（コマ番号と1:1対応）`);
-        } else {
-            appState.frameTimes = [];
-            logDebug(`フレーム時刻表は不採用（観測${table.length}/推定${expected}）。fps換算を使用。`);
-        }
+    if (result && result.times.length >= 2) {
+        appState.frameTimes = result.times;
+        appState.totalFrames = result.times.length - 1;
+        appState.fpsMeasured = true;
+        appState.videoFps = friendlyFpsFromTimes(result.times);
+        logDebug(`フレーム走査完了: ${result.times.length}コマ（実時刻表）`
+            + (result.skipped ? `／重複 ${result.skipped} コマを自動除外` : '')
+            + (result.seeks ? `／seek ${result.seeks}回` : ''));
+    } else {
+        // 走査不能（古い端末等）→ fps 換算フォールバック
+        appState.frameTimes = [];
+        appState.videoFps = appState.videoFps || 30;
+        appState.totalFrames = Math.max(0, Math.floor(appState.videoDuration * appState.videoFps));
+        logDebug('フレーム走査不可。fps換算にフォールバックします（精度はやや低下）。');
     }
-
     refreshFpsUI();
     const slider = document.getElementById('frame-slider');
     if (slider) slider.max = appState.totalFrames;
-
-    if (returnToStart) {
-        seekToFrame(0);
-    } else {
-        appState.currentFrame = Math.round(v.currentTime * appState.videoFps);
-        const slider2 = document.getElementById('frame-slider');
-        if (slider2) slider2.value = appState.currentFrame;
-        updateTimeDisplay();
-    }
+    seekToFrame(0);
+    updateTimeDisplay();
     persistState();
+    updateGraph();
+    updateStepGuide();
 }
+
+// 全フレームをシークで列挙し、{実時刻, 複製フラグ} を作る。
+async function scanAllFrames(v) {
+    const dur = v.duration;
+    if (!dur || !isFinite(dur)) return null;
+    const MAX_SEEKS = 5000;
+    let seeks = 0;
+    const frames = []; // { t, sig, dup }
+
+    // フレーム0
+    let f0 = await getFrameAt(v, 0); seeks++;
+    frames.push({ t: f0.mediaTime, sig: f0.sig, dup: false });
+    let lastT = f0.mediaTime, lastSig = f0.sig;
+
+    // 最初の間隔を測る（次フレームに当たるまでステップを倍々で広げる）
+    let step = 1 / 240;
+    let probe = await getFrameAt(v, lastT + step); seeks++;
+    let guard = 0;
+    while (probe.mediaTime <= lastT + 1e-4 && guard < 40 && seeks < MAX_SEEKS) {
+        step *= 1.6; probe = await getFrameAt(v, lastT + step); seeks++; guard++;
+    }
+    let interval = Math.max(1e-4, probe.mediaTime - lastT);
+    let pending = probe;       // 取得済みの「次フレーム」
+    let curT = lastT;
+
+    while (seeks < MAX_SEEKS) {
+        let fr = pending; pending = null;
+        if (!fr) {
+            // 控えめ(半間隔)から始め、当たるまで少しずつ広げる。1フレームを飛び越えないため
+            // 常に「次フレーム境界の手前」から漸増する → スキップ無しで必ず隣のコマに当たる。
+            const grow = Math.max(interval * 0.34, 1 / 1000);
+            let st = interval * 0.5;
+            let target = curT + st;
+            if (target >= dur - 1e-4) break;
+            fr = await getFrameAt(v, target); seeks++;
+            let g2 = 0;
+            while (fr.mediaTime <= lastT + 1e-4 && g2 < 30 && seeks < MAX_SEEKS) {
+                st += grow;
+                target = curT + st;
+                if (target >= dur - 1e-4) { fr = null; break; }
+                fr = await getFrameAt(v, target); seeks++; g2++;
+            }
+            if (!fr || fr.mediaTime <= lastT + 1e-4) break; // 末尾に到達
+        }
+        const gap = fr.mediaTime - lastT;
+        // 直近間隔へ追従（VFR対応）。ただし飛び越え(>1.4倍)時は更新せず基準を保つ。
+        if (gap > 0 && gap < interval * 1.4) interval = gap;
+        const isDup = changedFraction(fr.sig, lastSig) < DUP_FRACTION;
+        frames.push({ t: fr.mediaTime, sig: fr.sig, dup: isDup });
+        if (!isDup) lastSig = fr.sig;           // 複製でない時だけ基準署名を更新
+        lastT = fr.mediaTime; curT = fr.mediaTime;
+        showScanProgress(curT / dur);
+    }
+
+    // 複製除外（誤検出セーフティ：多すぎるなら除外しない）
+    const dupCount = frames.filter(f => f.dup).length;
+    let times, skipped = 0;
+    if (dupCount > 0 && dupCount <= frames.length * DUP_SAFETY_MAX) {
+        times = frames.filter(f => !f.dup).map(f => f.t);
+        skipped = dupCount;
+    } else {
+        times = frames.map(f => f.t);
+    }
+    times = buildFrameTimeTable(times); // 昇順保証＋近接(1ms)重複除去
+    return { times, skipped, seeks };
+}
+
+// rVFC非対応の古い端末向けフォールバック：細かいグリッドでシークし、画素変化で
+// 「新しい実フレーム」を検出してその初出時刻を記録する。VFRも近似でき、複製は自然に除外。
+async function scanGridFallback(v) {
+    const dur = v.duration;
+    if (!dur || !isFinite(dur)) return null;
+    const step = 1 / (240 * 2);   // 最大240fps想定の細かさ
+    const MAX_SEEKS = 6000;
+    let seeks = 0;
+    const times = [];
+    let f0 = await getFrameAt(v, 0); seeks++;
+    times.push(0); let lastSig = f0.sig;
+    for (let t = step; t < dur - 1e-4 && seeks < MAX_SEEKS; t += step) {
+        const fr = await getFrameAt(v, t); seeks++;
+        if (changedFraction(fr.sig, lastSig) >= DUP_FRACTION) { // 画素が明確に変化＝次フレーム
+            times.push(t); lastSig = fr.sig;
+        }
+        showScanProgress(t / dur);
+    }
+    let out = buildFrameTimeTable(times);
+    // 初出時刻はグリッド分（±step）のジッタを含む。ほぼ等間隔(CFR)なら一様間隔へスナップして
+    // 数値微分(加速度)のノイズを抑える。VFRはそのまま。
+    if (out.length >= 3) {
+        const dts = out.slice(1).map((t, i) => t - out[i]);
+        const sorted = [...dts].sort((a, b) => a - b);
+        const med = sorted[Math.floor(sorted.length / 2)];
+        if (med > 0 && dts.every(d => Math.abs(d - med) < med * 0.45)) {
+            out = out.map((_, i) => out[0] + i * med); // CFRスナップ
+        }
+    }
+    return { times: out, skipped: 0, seeks };
+}
+
+// 実フレーム時刻表から表示用の「親しみやすいfps」を求める（中央値間隔→常用値スナップ）
+function friendlyFpsFromTimes(times) {
+    if (times.length < 2) return appState.videoFps || 30;
+    const dts = [];
+    for (let i = 1; i < times.length; i++) dts.push(times[i] - times[i - 1]);
+    return fpsFromSamples(dts) || (appState.videoFps || 30);
+}
+
 
 // フレーム間隔サンプルの中央値からFPSを推定。近ければ常用値にスナップ。
 function fpsFromSamples(samples) {
@@ -599,11 +714,6 @@ function playVideo() {
 }
 
 function pauseVideo() {
-    // プレビュー再生中の一時停止は「プレビュー終了（その場で停止）」として扱う
-    if (appState.isPreviewing) {
-        finalizePreview(false);
-        return;
-    }
     appState.isPlaying = false;
     setPlayPauseIcon(false);
     appState.videoElement.pause();
@@ -636,10 +746,8 @@ function updateTimeDisplay() {
     const timeDisplay = document.getElementById('time-display');
     if (!timeDisplay) return;
     
-    // フレーム基準の時刻（中央シークの+0.5ぶんを表示に出さない）
-    const curSec = appState.isPreviewing
-        ? appState.videoElement.currentTime
-        : frameTimeOf(appState.currentFrame);
+    // フレーム基準の時刻（実フレーム時刻表 or fps換算）
+    const curSec = frameTimeOf(appState.currentFrame);
     const durSec = appState.videoDuration;
     
     const format = (sec) => {
@@ -2022,6 +2130,9 @@ window.resetZoom = resetZoom;
 window.updateGraph = updateGraph;
 window.deletePoint = deletePoint;
 window.undo = undo;
+window.computeKinematics = computeKinematics;
+window.buildExportTable = buildExportTable;
+window.startFrameScan = startFrameScan;
 window.test_setVars = test_setVars;
 
 if (typeof module !== 'undefined') {

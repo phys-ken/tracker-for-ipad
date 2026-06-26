@@ -156,7 +156,7 @@ async function waitUntil(cdp, S, expr, timeoutMs, label) {
         await evalExpr(cdp, S, `document.getElementById('btn-load-sample').click()`);
         await waitUntil(cdp, S, `window.appState.videoElement.readyState>=2 && window.appState.videoDuration>0`, 20000, '動画メタデータ');
         // プレビュー再生＋FPS実測＋フレーム時刻表構築の完了を待つ
-        await waitUntil(cdp, S, `window.appState.isPreviewing===false && window.appState.totalFrames>0`, 25000, 'プレビュー/FPS実測完了');
+        await waitUntil(cdp, S, `window.appState.isScanning===false && window.appState.totalFrames>0`, 30000, 'フレーム走査完了');
 
         const meta = await evalExpr(cdp, S, `({
             vw: appState.videoElement.videoWidth, vh: appState.videoElement.videoHeight,
@@ -167,7 +167,7 @@ async function waitUntil(cdp, S, expr, timeoutMs, label) {
             'totalFrames', meta.totalFrames, 'frameTimes', meta.frameTimes);
 
         ok(meta.vh > meta.vw, 'サンプルは縦長動画 (1080x1920) として実デコードされた');
-        ok(meta.frameTimes >= 11, `実フレーム時刻表が構築された (${meta.frameTimes}枚)`);
+        ok(meta.frameTimes >= 8, `実フレーム時刻表が構築された (${meta.frameTimes}枚)`);
         ok(meta.totalFrames === meta.frameTimes - 1, 'totalFrames = frameTimes.length-1 (コマ番号と1:1)');
 
         // --- ① レターボックス / canvas 全面化 ---
@@ -198,7 +198,7 @@ async function waitUntil(cdp, S, expr, timeoutMs, label) {
         `);
         const distinct = new Set(frames.sigs).size;
         console.log('  [info] frames N+1=' + (frames.N + 1) + ' distinctSignatures=' + distinct);
-        ok(frames.N + 1 >= 11, `フレーム数が妥当 (${frames.N + 1}コマ)`);
+        ok(frames.N + 1 >= 8, `フレーム数が妥当 (${frames.N + 1}コマ)`);
         ok(distinct === frames.N + 1, `全${frames.N + 1}コマが別フレーム (末尾重複・先頭スキップなし)`);
         ok(frames.sigs[frames.N] !== frames.sigs[frames.N - 1], '末尾2コマが別フレーム (旧バグの重複が解消)');
 

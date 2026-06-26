@@ -200,16 +200,16 @@
                 }
             },
             {
-                name: "プレビュー再生＋FPS実測＋フレーム時刻表の構築を待つ",
+                name: "フレーム走査（実時刻表＋重複除外）の完了を待つ",
                 fn: async (win) => {
-                    await waitFor(() => win.appState.isPreviewing === false && win.appState.totalFrames > 0, 25000, 'プレビュー完了');
+                    await waitFor(() => win.appState.isScanning === false && win.appState.totalFrames > 0, 30000, 'フレーム走査完了');
                     log(`fps=${win.appState.videoFps}, totalFrames=${win.appState.totalFrames}, frameTimes=${win.appState.frameTimes.length}`);
-                    assert(win.appState.frameTimes.length >= 11, "実フレーム時刻表が構築されていること");
+                    assert(win.appState.frameTimes.length >= 8, "実フレーム時刻表が構築されていること");
                     assertEq(win.appState.totalFrames, win.appState.frameTimes.length - 1, "totalFrames=frameTimes.length-1 (コマと1:1)");
                 }
             },
             {
-                name: "プレビュー後は先頭フレーム(0)に戻ること",
+                name: "走査後は先頭フレーム(0)に戻ること",
                 fn: async (win) => {
                     assertEq(win.appState.currentFrame, 0, "currentFrameが0");
                 }
