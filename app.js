@@ -33,7 +33,9 @@ const appState = {
     isAutoTracking: false,    // 自動追跡実行フラグ
     selectedPointId: null,    // 現在選択されているトラックポイントのID
     videoName: null,          // 現在読み込み中の動画のファイル名（復元判定の指紋用）
-    videoSize: 0              // 同・ファイルサイズ(bytes)
+    videoSize: 0,             // 同・ファイルサイズ(bytes)
+    rangeIn: 0,               // 解析範囲の開始コマ（イン点）
+    rangeOut: 0               // 解析範囲の終了コマ（アウト点）
 };
 
 // グローバル（window）に公開してテストスイートからアクセス可能にする
@@ -229,6 +231,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupFileUpload();
     setupSampleLoad();
     setupPlaybackControls();
+    setupRangeControls();
     setupDebugConsole();
     setupCanvasTouch();
     setupModeButtons();
@@ -543,6 +546,7 @@ async function startFrameScan() {
     if (appState.fpsManual) { // 手動fps指定時は走査せず換算
         appState.frameTimes = [];
         appState.totalFrames = Math.max(0, Math.floor(appState.videoDuration * appState.videoFps));
+        resetAnalysisRange();
         seekToFrame(0); return;
     }
     appState.isScanning = true;
@@ -598,6 +602,7 @@ async function startFrameScan() {
     refreshFpsUI();
     const slider = document.getElementById('frame-slider');
     if (slider) slider.max = appState.totalFrames;
+    resetAnalysisRange();
     seekToFrame(0);
     updateTimeDisplay();
     persistState();
@@ -850,7 +855,8 @@ function setupPlaybackControls() {
     if (slider) {
         slider.addEventListener('input', (e) => {
             const targetFrame = parseInt(e.target.value);
-            seekToFrame(targetFrame);
+            // 解析範囲内にクランプ（範囲外へはドラッグで出られない）
+            seekToFrame(Math.max(appState.rangeIn, Math.min(appState.rangeOut, targetFrame)));
         });
     }
 }
@@ -858,8 +864,98 @@ function setupPlaybackControls() {
 function stepFrame(delta) {
     if (!appState.videoElement.src) return;
     pauseVideo();
-    const targetFrame = Math.max(0, Math.min(appState.totalFrames, appState.currentFrame + delta));
+    // コマ送りは解析範囲内に収める（範囲外は表・グラフからも除外されるため）
+    const targetFrame = Math.max(appState.rangeIn, Math.min(appState.rangeOut, appState.currentFrame + delta));
     seekToFrame(targetFrame);
+}
+
+// --- 解析範囲（イン/アウト点） ---------------------------------------
+function inAnalysisRange(frame) {
+    return frame >= appState.rangeIn && frame <= appState.rangeOut;
+}
+
+function resetAnalysisRange() {
+    appState.rangeIn = 0;
+    appState.rangeOut = appState.totalFrames;
+    updateRangeUI();
+}
+
+// シークバー上に選択範囲をシアン（計器/校正の色）で示す
+function updateRangeUI() {
+    const slider = document.getElementById('frame-slider');
+    const lbl = document.getElementById('lbl-range');
+    const total = Math.max(1, appState.totalFrames);
+    const full = appState.rangeIn === 0 && appState.rangeOut === appState.totalFrames;
+    if (slider) {
+        if (full) {
+            slider.style.background = '';
+        } else {
+            const a = (appState.rangeIn / total) * 100;
+            const b = (appState.rangeOut / total) * 100;
+            slider.style.background =
+                `linear-gradient(90deg, var(--line) 0%, var(--line) ${a}%, ` +
+                `var(--cyan) ${a}%, var(--cyan) ${b}%, var(--line) ${b}%, var(--line) 100%)`;
+        }
+    }
+    if (lbl) lbl.textContent = full ? '全体' : `${appState.rangeIn}–${appState.rangeOut}`;
+}
+
+// 範囲確定時にその範囲だけ複製コマを除外（読込時に持ち越した分。1動画につき1回）
+const DEDUP_RANGE_MAX = 300;
+async function maybeDedupRange() {
+    if (appState.dedupDone || !appState.frameTimes.length) return;
+    if (appState.trackingData.length > 0) {
+        logDebug('計測データがあるためコマ番号を変えられません（重複除外スキップ）');
+        return;
+    }
+    const len = appState.rangeOut - appState.rangeIn + 1;
+    if (len < 2 || len > DEDUP_RANGE_MAX) return;
+    appState.isScanning = true;
+    showScanProgress(0);
+    const seg = appState.frameTimes.slice(appState.rangeIn, appState.rangeOut + 1);
+    let d = null;
+    try { d = await dedupTimesByPixel(appState.videoElement, seg); }
+    catch (e) { logDebug('範囲の重複確認に失敗: ' + (e && e.message)); }
+    appState.isScanning = false;
+    hideScanProgress();
+    if (!d) return;
+    if (d.skipped > 0) {
+        const before = appState.frameTimes.slice(0, appState.rangeIn);
+        const after = appState.frameTimes.slice(appState.rangeOut + 1);
+        appState.frameTimes = buildFrameTimeTable([...before, ...d.times, ...after]);
+        appState.totalFrames = appState.frameTimes.length - 1;
+        appState.rangeOut = Math.max(appState.rangeIn, appState.rangeOut - d.skipped);
+        appState.videoFps = friendlyFpsFromTimes(appState.frameTimes);
+        const slider = document.getElementById('frame-slider');
+        if (slider) slider.max = appState.totalFrames;
+        refreshFpsUI();
+        logDebug(`解析範囲の複製コマ ${d.skipped} 枚を除外しました`);
+    }
+    appState.dedupDone = true;
+    updateRangeUI();
+    updateTimeDisplay();
+}
+
+function setupRangeControls() {
+    const btnIn = document.getElementById('btn-range-in');
+    const btnOut = document.getElementById('btn-range-out');
+    if (btnIn) btnIn.addEventListener('click', () => {
+        if (!appState.videoElement.src) return;
+        pauseVideo();
+        // 既にイン点と同じコマでもう一度押すと解除（先頭へ戻す）
+        appState.rangeIn = (appState.rangeIn === appState.currentFrame) ? 0
+            : Math.min(appState.currentFrame, appState.rangeOut);
+        updateRangeUI(); updateDataTable(); updateGraph();
+        maybeDedupRange();
+    });
+    if (btnOut) btnOut.addEventListener('click', () => {
+        if (!appState.videoElement.src) return;
+        pauseVideo();
+        appState.rangeOut = (appState.rangeOut === appState.currentFrame) ? appState.totalFrames
+            : Math.max(appState.currentFrame, appState.rangeIn);
+        updateRangeUI(); updateDataTable(); updateGraph();
+        maybeDedupRange();
+    });
 }
 
 // --- シーク直列化キュー ---------------------------------------------
@@ -1828,9 +1924,9 @@ function updateDataTable() {
     tableBody.innerHTML = '';
     
     const filteredData = appState.trackingData
-        .filter(p => p.objectId === appState.activeObjectId)
+        .filter(p => p.objectId === appState.activeObjectId && inAnalysisRange(p.frame))
         .sort((a, b) => a.frame - b.frame);
-        
+
     if (filteredData.length === 0) {
         tableBody.innerHTML = `<tr class="empty-row"><td colspan="4">データがありません</td></tr>`;
         updateStepGuide();
@@ -2039,7 +2135,7 @@ function updateGraph() {
     }
 
     const data = appState.trackingData
-        .filter(p => p.objectId === appState.activeObjectId)
+        .filter(p => p.objectId === appState.activeObjectId && inAnalysisRange(p.frame))
         .sort((a, b) => a.frame - b.frame);
     const unit = appState.calibration.scaleRatio ? "cm" : "px";
     const kin = data.length ? computeKinematics(data) : [];
@@ -2201,7 +2297,7 @@ function buildExportTable() {
     const objectIds = [...new Set(appState.trackingData.map(p => p.objectId))].sort((a, b) => a - b);
     objectIds.forEach(oid => {
         const sorted = appState.trackingData
-            .filter(p => p.objectId === oid)
+            .filter(p => p.objectId === oid && inAnalysisRange(p.frame))
             .sort((a, b) => a.frame - b.frame);
         const kin = computeKinematics(sorted);
         kin.forEach(k => {

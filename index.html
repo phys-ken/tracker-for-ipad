@@ -69,11 +69,21 @@
                     <button class="btn-icon btn-play" id="btn-play-pause" title="再生 / 一時停止">
                         <span class="material-icons-round">play_arrow</span>
                     </button>
+                    <button class="btn-icon btn-range" id="btn-range-in" title="イン点（解析開始）を現在のコマに設定。同じコマでもう一度押すと解除">
+                        <span class="material-icons-round">first_page</span>
+                    </button>
                     <div class="slider-container">
                         <input type="range" id="frame-slider" min="0" max="100" value="0" disabled>
                         <span class="time-display" id="time-display">00:00 / 00:00</span>
                     </div>
+                    <button class="btn-icon btn-range" id="btn-range-out" title="アウト点（解析終了）を現在のコマに設定。同じコマでもう一度押すと解除">
+                        <span class="material-icons-round">last_page</span>
+                    </button>
                     <div class="info-indicators">
+                        <div class="indicator">
+                            <span class="label">範囲:</span>
+                            <span class="value" id="lbl-range">全体</span>
+                        </div>
                         <div class="indicator">
                             <span class="label">コマ:</span>
                             <span class="value" id="lbl-frame">0</span>
