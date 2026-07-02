@@ -280,6 +280,7 @@ function loadSampleVideo() {
             resetForNewVideo();
             appState.videoName = 'sample.mp4';
             appState.videoSize = blob.size;
+            appState.videoBlob = blob; // コンテナ解析(mp4box)用に元データを保持
 
             const url = URL.createObjectURL(blob);
             const hintOverlay = document.getElementById('hint-overlay');
@@ -338,6 +339,7 @@ function setupFileUpload() {
             resetForNewVideo();
             appState.videoName = file.name;
             appState.videoSize = file.size;
+            appState.videoBlob = file; // コンテナ解析(mp4box)用に元データを保持
 
             const fileUrl = URL.createObjectURL(file);
             if (hintOverlay) hintOverlay.style.opacity = '0';
@@ -465,7 +467,76 @@ function hideScanProgress() {
     if (o) o.style.opacity = '0';
 }
 
-// 読込直後に呼ばれる。全フレームを走査して時刻表を作る。
+// --- コンテナ解析（mp4box.js）: デコードもシークもせず実サンプル時刻を瞬時に取得 ---
+// iPad撮影の .mov/.mp4（H.264/HEVC・スロモVFR含む）はここで数百msで時刻表が完成する。
+// パース不能な形式や検証NG時のみ、従来のシーク走査へフォールバックする。
+async function buildTimesFromContainer(blob) {
+    if (typeof MP4Box === 'undefined' || !blob) return null;
+    try {
+        const buf = await blob.arrayBuffer();
+        return await new Promise((resolve) => {
+            const mp4 = MP4Box.createFile();
+            let nbSamples = 0;
+            const times = [];
+            const to = setTimeout(() => resolve(null), 8000); // 安全網
+            const done = (r) => { clearTimeout(to); resolve(r); };
+            mp4.onError = () => done(null);
+            mp4.onReady = (info) => {
+                const track = (info.videoTracks && info.videoTracks[0]) || null;
+                if (!track || !track.nb_samples) { done(null); return; }
+                nbSamples = track.nb_samples;
+                mp4.setExtractionOptions(track.id, null, { nbSamples: nbSamples });
+                mp4.start();
+            };
+            mp4.onSamples = (id, user, samples) => {
+                for (const s of samples) times.push(s.cts / s.timescale);
+                if (nbSamples && times.length >= nbSamples) done(times);
+            };
+            buf.fileStart = 0;
+            mp4.appendBuffer(buf);
+            mp4.flush();
+        });
+    } catch (e) { return null; }
+}
+
+// コンテナ由来の時刻表が <video> の再生時間軸と一致しているか、実シークで数点だけ検証。
+// （MP4のedit listでcts軸と再生軸がずれる動画があるため。ずれていたら走査へ切替）
+async function verifyTimesAgainstVideo(v, times) {
+    if (!rvfcSupported) return true; // rVFC無し端末は検証不能→信じる（換算より高精度）
+    const picks = [0, Math.floor((times.length - 1) / 2)];
+    for (const i of picks) {
+        const lo = times[i];
+        const hi = (i < times.length - 1) ? times[i + 1] : lo + (times[i] - times[i - 1] || 1 / 30);
+        const fr = await getFrameAt(v, (lo + hi) / 2);
+        // 表示フレームの実時刻が期待区間(±半コマ)に入っていればOK
+        const tol = (hi - lo) * 0.75;
+        if (Math.abs(fr.mediaTime - lo) > tol) return false;
+    }
+    return true;
+}
+
+// 指定の時刻表に対し、実フレームを1枚ずつ表示してピクセル署名で複製コマを除外する。
+// コマ数が少ない（＝短い動画 or 解析範囲確定後）ときだけ呼ぶこと。
+async function dedupTimesByPixel(v, times) {
+    const kept = [];
+    let lastSig = null, skipped = 0;
+    for (let i = 0; i < times.length; i++) {
+        const lo = times[i];
+        const hi = (i < times.length - 1) ? times[i + 1] : lo + (lo - (times[i - 1] || lo - 1 / 30));
+        const fr = await getFrameAt(v, (lo + hi) / 2);
+        const isDup = lastSig && changedFraction(fr.sig, lastSig) < DUP_FRACTION;
+        if (isDup) { skipped++; } else { kept.push(times[i]); lastSig = fr.sig; }
+        showScanProgress((i + 1) / times.length);
+    }
+    // 誤検出セーフティ（2割超が複製判定なら除外しない）
+    if (skipped > 0 && skipped <= times.length * DUP_SAFETY_MAX) return { times: kept, skipped };
+    return { times: times.slice(), skipped: 0 };
+}
+
+// 読込時にその場で複製除外まで済ませてよいコマ数の上限（超える場合は範囲確定後に実施）
+const DEDUP_AT_LOAD_MAX = 64;
+
+// 読込直後に呼ばれる。コンテナ解析→（短尺なら）複製除外。不能時のみシーク走査。
 async function startFrameScan() {
     const v = appState.videoElement;
     if (!v || v.readyState < 1) return;
@@ -475,10 +546,37 @@ async function startFrameScan() {
         seekToFrame(0); return;
     }
     appState.isScanning = true;
+    appState.dedupDone = false;
     showScanProgress(0);
     let result = null;
-    try { result = rvfcSupported ? await scanAllFrames(v) : await scanGridFallback(v); }
-    catch (e) { logDebug('フレーム走査に失敗: ' + (e && e.message)); }
+
+    // 1) コンテナ解析（瞬時・シーク不要）
+    try {
+        let times = await buildTimesFromContainer(appState.videoBlob);
+        if (times && times.length >= 2) {
+            const tMin = times.reduce((a, b) => (b < a ? b : a), Infinity);
+            times = buildFrameTimeTable(times.map(t => t - tMin));
+            if (await verifyTimesAgainstVideo(v, times)) {
+                if (times.length <= DEDUP_AT_LOAD_MAX) {
+                    const d = await dedupTimesByPixel(v, times);
+                    result = { times: d.times, skipped: d.skipped, seeks: 0 };
+                    appState.dedupDone = true;
+                } else {
+                    result = { times, skipped: 0, seeks: 0 };
+                }
+                logDebug('コンテナ解析で時刻表を取得（シーク走査なし）');
+            } else {
+                logDebug('コンテナ時刻表が再生軸と不一致。シーク走査に切替えます。');
+            }
+        }
+    } catch (e) { logDebug('コンテナ解析に失敗: ' + (e && e.message)); }
+
+    // 2) フォールバック: 従来のシーク走査
+    if (!result) {
+        try { result = rvfcSupported ? await scanAllFrames(v) : await scanGridFallback(v); }
+        catch (e) { logDebug('フレーム走査に失敗: ' + (e && e.message)); }
+        if (result) appState.dedupDone = true; // 走査は複製除外込み
+    }
     appState.isScanning = false;
     hideScanProgress();
 
@@ -764,15 +862,70 @@ function stepFrame(delta) {
     seekToFrame(targetFrame);
 }
 
+// --- シーク直列化キュー ---------------------------------------------
+// Safariは連続する currentTime 設定を間引く（コアレスする）ため、投げっぱなしの
+// シークはボタン連打で「内部コマ番号」と「表示フレーム」がずれる。ここでは
+// 常に1件だけ実行し、連打時は「最後の要求」だけを次に実行する（中間は捨てる）。
+let seekBusy = false;
+let seekPendingFrame = null;
+
 function seekToFrame(frame) {
     appState.currentFrame = Math.max(0, Math.min(appState.totalFrames, frame));
-    // 実フレーム時刻表があればその区間中央へ、無ければ fps 換算でフレーム中央へ。
-    // 境界でのデコードずれ（特にSafari/iPad）を避けやすい。
-    const targetTime = seekTimeOf(appState.currentFrame);
-    appState.videoElement.currentTime = Math.min(appState.videoDuration - 0.001, Math.max(0, targetTime));
-
     const slider = document.getElementById('frame-slider');
     if (slider) slider.value = appState.currentFrame;
+    seekPendingFrame = appState.currentFrame;
+    pumpSeekQueue();
+}
+
+function pumpSeekQueue() {
+    if (seekBusy || seekPendingFrame === null) return;
+    const frame = seekPendingFrame;
+    seekPendingFrame = null;
+    seekBusy = true;
+
+    const v = appState.videoElement;
+    // 実フレーム時刻表があればその区間中央へ、無ければ fps 換算でフレーム中央へ。
+    // 境界でのデコードずれ（特にSafari/iPad）を避けやすい。
+    const targetTime = Math.min(appState.videoDuration - 0.001, Math.max(0, seekTimeOf(frame)));
+
+    let done = false;
+    const finish = (mediaTime) => {
+        if (done) return;
+        done = true;
+        // 後続の要求が無ければ、実際に表示されたフレームを真実として補正
+        if (mediaTime !== null && seekPendingFrame === null && appState.frameTimes.length) {
+            const shown = frameIndexOfTime(mediaTime);
+            if (shown !== appState.currentFrame) {
+                logDebug(`シーク補正: 要求コマ${appState.currentFrame} → 表示コマ${shown}`);
+                appState.currentFrame = shown;
+                const slider = document.getElementById('frame-slider');
+                if (slider) slider.value = shown;
+            }
+        }
+        seekBusy = false;
+        pumpSeekQueue(); // 連打中に溜まった最後の要求を実行
+    };
+
+    if (rvfcSupported && !appState.isScanning) {
+        v.requestVideoFrameCallback((now, meta) => finish(meta.mediaTime));
+    } else {
+        const onSeeked = () => { v.removeEventListener('seeked', onSeeked); finish(null); };
+        v.addEventListener('seeked', onSeeked);
+    }
+    v.currentTime = targetTime;
+    setTimeout(() => finish(null), 1500); // 同一フレームへのシーク等でrVFCが発火しない場合の安全網
+}
+
+// 再生時刻 t(s) → コマ番号（実時刻表を二分探索。表が無ければfps換算）
+function frameIndexOfTime(t) {
+    const ft = appState.frameTimes;
+    if (!ft || !ft.length) return Math.floor(t * appState.videoFps);
+    let lo = 0, hi = ft.length - 1;
+    while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (ft[mid] <= t + 1e-6) lo = mid; else hi = mid - 1;
+    }
+    return Math.min(lo, appState.totalFrames);
 }
 
 function playVideo() {
@@ -793,7 +946,8 @@ function pauseVideo() {
 function renderLoop() {
     if (!appState.isPlaying) return;
     
-    appState.currentFrame = Math.floor(appState.videoElement.currentTime * appState.videoFps);
+    // 再生中も実時刻表と同じ座標系でコマ番号を出す（floor(t*fps)だと停止後のコマ送りとずれる）
+    appState.currentFrame = frameIndexOfTime(appState.videoElement.currentTime);
     const slider = document.getElementById('frame-slider');
     if (slider) slider.value = appState.currentFrame;
     
