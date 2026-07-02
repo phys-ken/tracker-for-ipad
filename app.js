@@ -238,6 +238,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupSettingsInputs();
     setupObjectButtons();
     setupExport();
+    setupStrobe();
     setupAutoTrackerUI();
     setupGraphEvents();
     setupDeletionEvent();
@@ -2367,6 +2368,109 @@ function setupExport() {
     });
 }
 
+// --- ストロボ写真 -----------------------------------------------------
+// 追跡点周辺の円形パッチ切り貼り方式：基準フレーム（最初の点のコマ）の上に、
+// 各確定点の周囲だけをそのコマの映像から切り出して重ねる。明合成と違い
+// 背景の明暗に依存せず、明るい教室の映像でも確実に「残像列」になる。
+// フレームは1枚ずつシークして合成し、キャッシュしない（iPad Safariの
+// canvas総メモリ上限≈384MB対策）。
+const STROBE_MAX_DIM = 4096; // iOS Safariのcanvas1辺上限（安全側）
+
+function strobePoints(everyN) {
+    return appState.trackingData
+        .filter(p => p.objectId === appState.activeObjectId && inAnalysisRange(p.frame))
+        .sort((a, b) => a.frame - b.frame)
+        .filter((p, i) => i % everyN === 0);
+}
+
+async function generateStrobe(canvas, everyN, radius, onProgress) {
+    const v = appState.videoElement;
+    const pts = strobePoints(everyN);
+    if (pts.length < 2) return 0;
+
+    // 動画実解像度で合成（上限超過時のみ縮小）
+    const s = Math.min(1, STROBE_MAX_DIM / Math.max(v.videoWidth, v.videoHeight));
+    canvas.width = Math.round(v.videoWidth * s);
+    canvas.height = Math.round(v.videoHeight * s);
+    const ctx = canvas.getContext('2d');
+
+    const returnFrame = appState.currentFrame;
+    appState.isScanning = true; // 大量シーク中の本描画をスキップ（高速化）
+    try {
+        // 基準フレーム＝最初の点のコマを全面に敷く
+        await getFrameAt(v, seekTimeOf(pts[0].frame));
+        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+        // 2点目以降：そのコマの映像から点の周囲だけを円形に切り貼り
+        for (let i = 1; i < pts.length; i++) {
+            await getFrameAt(v, seekTimeOf(pts[i].frame));
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(pts[i].x * s, pts[i].y * s, radius * s, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+            ctx.restore();
+            if (onProgress) onProgress((i + 1) / pts.length);
+        }
+    } finally {
+        appState.isScanning = false;
+        seekToFrame(returnFrame);
+    }
+    return pts.length;
+}
+
+function setupStrobe() {
+    const btn = document.getElementById('btn-strobe');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+        if (strobePoints(1).length < 2) {
+            showInputDialog('ストロボ写真', '<p>この物体の追跡点が2点以上必要です。<br>十字を対象に合わせて「確定」で点を打ってから使ってください。</p>', '', () => {});
+            return;
+        }
+        const body = `
+            <p style="margin-bottom:6px;">追跡点のコマを重ねてストロボ写真を作ります。</p>
+            <canvas id="strobe-preview" style="width:100%; border:1px solid #2B333D; border-radius:5px; background:#0F1216;"></canvas>
+            <div style="display:flex; gap:14px; margin-top:8px; font-size:0.8rem;">
+                <label style="flex:1;">間引き（1/N点）: <span id="strobe-n-val">1</span>
+                    <input type="range" id="strobe-n" min="1" max="10" value="1" style="width:100%;">
+                </label>
+                <label style="flex:1;">パッチ半径(px): <span id="strobe-r-val">60</span>
+                    <input type="range" id="strobe-r" min="10" max="200" value="60" style="width:100%;">
+                </label>
+            </div>
+            <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+                <button class="btn btn-primary" id="btn-strobe-save" style="flex:1;">PNG保存</button>
+                <span id="strobe-status" style="font-size:0.75rem; color:#8A95A3;"></span>
+            </div>
+        `;
+        showInputDialog('ストロボ写真', body, '', () => {});
+
+        const cv = document.getElementById('strobe-preview');
+        const status = document.getElementById('strobe-status');
+        let busy = false;
+        const regen = async () => {
+            if (busy) return;
+            busy = true;
+            const n = parseInt(document.getElementById('strobe-n').value);
+            const r = parseInt(document.getElementById('strobe-r').value);
+            document.getElementById('strobe-n-val').textContent = n;
+            document.getElementById('strobe-r-val').textContent = r;
+            if (status) status.textContent = '合成中…';
+            const count = await generateStrobe(cv, n, r,
+                (p) => { if (status) status.textContent = `合成中… ${Math.round(p * 100)}%`; });
+            if (status) status.textContent = count ? `${count}コマを合成` : '点が不足しています';
+            busy = false;
+        };
+        document.getElementById('strobe-n').addEventListener('change', regen);
+        document.getElementById('strobe-r').addEventListener('change', regen);
+        document.getElementById('btn-strobe-save').addEventListener('click', () => {
+            cv.toBlob((blob) => {
+                if (blob) { downloadBlob(blob, 'strobe.png'); logDebug('ストロボ写真を保存しました'); }
+            }, 'image/png');
+        });
+        regen();
+    });
+}
+
 function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -2474,6 +2578,9 @@ window.videoToLocalCanvas = videoToLocalCanvas;
 window.getFitMetrics = getFitMetrics;
 window.frameTimeOf = frameTimeOf;
 window.seekTimeOf = seekTimeOf;
+window.generateStrobe = generateStrobe;
+window.strobePoints = strobePoints;
+window.frameIndexOfTime = frameIndexOfTime;
 window.buildFrameTimeTable = buildFrameTimeTable;
 window.seekToFrame = seekToFrame;
 window.stepFrame = stepFrame;

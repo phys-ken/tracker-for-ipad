@@ -263,6 +263,17 @@ async function waitUntil(cdp, S, expr, timeoutMs, label) {
         const unitHead = await evalExpr(cdp, S, `document.querySelectorAll('#data-table thead th')[1].textContent`);
         ok(/cm/.test(unitHead), `スケール設定後はデータ表ヘッダが cm 表記 (${unitHead})`);
 
+        // ストロボ写真: 追跡点のコマを実合成し、動画解像度のPNGが得られる
+        const strobe = await evalAsync(cdp, S, `
+            const cv = document.createElement('canvas');
+            const n = await window.generateStrobe(cv, 1, 60, null);
+            const url = cv.toDataURL('image/png');
+            return { n, w: cv.width, h: cv.height, png: url.startsWith('data:image/png') && url.length > 5000 };
+        `);
+        ok(strobe.n >= 3, `ストロボ: ${strobe.n}コマを合成できた`);
+        ok(strobe.w === 1080 && strobe.h === 1920, `ストロボ: 動画実解像度で合成 (${strobe.w}x${strobe.h})`);
+        ok(strobe.png, 'ストロボ: PNGデータとして出力できる');
+
     } catch (e) {
         fail++;
         console.error('❌ 実行エラー: ' + e.message);
