@@ -263,15 +263,47 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // --- サンプル動画の読み込み（fetch経由のバックドア） ---
 // 生徒の「お試し」用 兼 自動テスト用。アップロードダイアログを回避して
-// サーバ上の sample.mp4 を直接 Blob 化して読み込む。
+// サーバ上の動画を直接 Blob 化して読み込む。
+// samples/ は tools/gen_samples.py で生成した真値既知の合成動画（詳細は MANUAL.md）。
+const SAMPLE_LIST = [
+    { file: 'samples/free_fall.mp4',           name: '自由落下',       hint: 'v0=0・約1.6m落下' },
+    { file: 'samples/vertical_throw.mp4',      name: '鉛直投げ上げ',   hint: '上がって戻ってくる' },
+    { file: 'samples/projectile.mp4',          name: '水平投射',       hint: '水平に投げ出した球' },
+    { file: 'samples/collision_elastic.mp4',   name: '衝突（弾性）',   hint: '動く球が静止球に・物体2つ' },
+    { file: 'samples/collision_inelastic.mp4', name: '衝突（合体）',   hint: 'くっついて動く・物体2つ' }
+];
+
 function setupSampleLoad() {
     const btn = document.getElementById('btn-load-sample');
-    if (btn) btn.addEventListener('click', loadSampleVideo);
+    if (btn) btn.addEventListener('click', showSampleDialog);
 }
 
+// サンプル選択ダイアログ。各項目に現象名と一言ヒントのみ（真値の詳細は MANUAL.md）。
+function showSampleDialog() {
+    const items = SAMPLE_LIST.map((s, i) =>
+        `<button class="btn btn-secondary sample-item" data-idx="${i}"
+                 style="width:100%; justify-content:flex-start; margin-bottom:6px;">
+             <span class="material-icons-round">smart_display</span>
+             ${s.name}<span style="margin-left:auto; font-size:0.72rem; color:#8A95A3;">${s.hint}</span>
+         </button>`).join('');
+    showInputDialog('サンプル動画を選ぶ', `<div>${items}</div>`, '', () => {});
+    document.querySelectorAll('.sample-item').forEach(el => {
+        el.addEventListener('click', () => {
+            const s = SAMPLE_LIST[parseInt(el.dataset.idx)];
+            document.getElementById('dialog-btn-cancel').click(); // ダイアログを閉じる
+            loadSampleByUrl(s.file, `${s.name} (${s.file.split('/').pop()})`);
+        });
+    });
+}
+
+// テスト用バックドア（従来どおり sample.mp4 を直接読む。テストが直接呼ぶ）
 function loadSampleVideo() {
-    logDebug("サンプル動画 (sample.mp4) を読み込みます...");
-    fetch('sample.mp4')
+    loadSampleByUrl('sample.mp4', 'sample.mp4');
+}
+
+function loadSampleByUrl(url, displayName) {
+    logDebug(`サンプル動画 (${displayName}) を読み込みます...`);
+    fetch(url)
         .then(res => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.blob();
@@ -282,17 +314,17 @@ function loadSampleVideo() {
             }
             // 新しい動画を読み込む前に、前回データの中途半端な干渉を防ぐため全リセット
             resetForNewVideo();
-            appState.videoName = 'sample.mp4';
+            appState.videoName = url;
             appState.videoSize = blob.size;
             appState.videoBlob = blob; // コンテナ解析(mp4box)用に元データを保持
 
-            const url = URL.createObjectURL(blob);
+            const objectUrl = URL.createObjectURL(blob);
             const hintOverlay = document.getElementById('hint-overlay');
             if (hintOverlay) hintOverlay.style.opacity = '0';
             appState.fpsManual = false;
             appState.fpsMeasured = false;
             appState.frameTimes = [];
-            appState.videoElement.src = url;
+            appState.videoElement.src = objectUrl;
             appState.videoElement.load();
         })
         .catch(err => logDebug(`サンプル読み込み失敗: ${err.message}（ローカルサーバ経由で開いてください）`));
@@ -2578,6 +2610,8 @@ window.videoToLocalCanvas = videoToLocalCanvas;
 window.getFitMetrics = getFitMetrics;
 window.frameTimeOf = frameTimeOf;
 window.seekTimeOf = seekTimeOf;
+window.loadSampleVideo = loadSampleVideo;
+window.loadSampleByUrl = loadSampleByUrl;
 window.generateStrobe = generateStrobe;
 window.strobePoints = strobePoints;
 window.frameIndexOfTime = frameIndexOfTime;

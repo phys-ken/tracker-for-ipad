@@ -153,7 +153,8 @@ async function waitUntil(cdp, S, expr, timeoutMs, label) {
         await waitUntil(cdp, S, `document.readyState==='complete' && typeof window.appState==='object'`, 10000, 'アプリ初期化');
 
         // --- サンプル動画を実デコードで読み込む ---
-        await evalExpr(cdp, S, `document.getElementById('btn-load-sample').click()`);
+        // ボタンはサンプル選択ダイアログを開くようになったため、テストはバックドアを直接呼ぶ
+        await evalExpr(cdp, S, `window.loadSampleVideo()`);
         await waitUntil(cdp, S, `window.appState.videoElement.readyState>=2 && window.appState.videoDuration>0`, 20000, '動画メタデータ');
         // プレビュー再生＋FPS実測＋フレーム時刻表構築の完了を待つ
         await waitUntil(cdp, S, `window.appState.isScanning===false && window.appState.totalFrames>0`, 30000, 'フレーム走査完了');
@@ -273,6 +274,17 @@ async function waitUntil(cdp, S, expr, timeoutMs, label) {
         ok(strobe.n >= 3, `ストロボ: ${strobe.n}コマを合成できた`);
         ok(strobe.w === 1080 && strobe.h === 1920, `ストロボ: 動画実解像度で合成 (${strobe.w}x${strobe.h})`);
         ok(strobe.png, 'ストロボ: PNGデータとして出力できる');
+
+        // 新サンプル動画: samples/ の合成動画がコンテナ解析で真値どおり読める
+        await evalExpr(cdp, S, `window.loadSampleByUrl('samples/free_fall.mp4','free_fall')`);
+        await waitUntil(cdp, S,
+            `window.appState.videoName==='samples/free_fall.mp4' && window.appState.isScanning===false && window.appState.frameTimes.length>0`,
+            30000, '新サンプル読込');
+        const smp = await evalExpr(cdp, S,
+            `({ n: appState.frameTimes.length, fps: appState.videoFps, vw: appState.videoElement.videoWidth })`);
+        ok(smp.n >= 33 && smp.n <= 35, `新サンプル: 実時刻表 ${smp.n}コマ (期待35±微小)`);
+        ok(Math.abs(smp.fps - 60) < 0.5, `新サンプル: fps≈60 (実測 ${smp.fps})`);
+        ok(smp.vw === 540, `新サンプル: 540x960で実デコード`);
 
     } catch (e) {
         fail++;

@@ -194,7 +194,7 @@
             {
                 name: "サンプル動画を読み込みデコード完了を待つ",
                 fn: async (win) => {
-                    win.document.getElementById('btn-load-sample').click();
+                    win.loadSampleVideo(); // ボタンは選択ダイアログを開くため、バックドアを直接呼ぶ
                     await waitFor(() => win.appState.videoElement.readyState >= 2 && win.appState.videoDuration > 0, 20000, '動画メタデータ');
                     log(`動画ロード完了: ${win.appState.videoElement.videoWidth}x${win.appState.videoElement.videoHeight}, ${win.appState.videoDuration.toFixed(2)}s`);
                 }
