@@ -49,15 +49,23 @@ body {
     font-family: var(--font-sans);
     font-feature-settings: "palt" 1;
     overflow: hidden;
+    /* iOS Safariの100vhはツールバー裏を含む。svh対応端末(iPadOS15.4+)では安定値で上書き */
     height: 100vh;
-    width: 100vw;
+    height: 100svh;
+    width: 100%;
+    overscroll-behavior: none; /* 引っ張り更新・スワイプバック誤動作の防止 */
 }
 
 .app-container {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    padding: 12px;
+    height: 100svh;
+    /* viewport-fit=cover 前提。ノッチ/ホームバーのセーフエリアと基本余白の大きい方を採用 */
+    padding: max(12px, env(safe-area-inset-top, 0px))
+             max(12px, env(safe-area-inset-right, 0px))
+             max(12px, env(safe-area-inset-bottom, 0px))
+             max(12px, env(safe-area-inset-left, 0px));
     gap: 12px;
 }
 
@@ -565,6 +573,7 @@ details.panel-collapsible[open] > summary h2::after { transform: rotate(180deg);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
     padding: 9px 14px 11px;
+    padding-bottom: max(11px, env(safe-area-inset-bottom, 0px)); /* ホームインジケータ回避 */
     display: flex;
     flex-direction: column;
     gap: 7px;
@@ -629,7 +638,7 @@ details.panel-collapsible[open] > summary h2::after { transform: rotate(180deg);
     padding: 8px;
     outline: none;
     font-family: var(--font-mono);
-    font-size: 0.85rem;
+    font-size: 16px; /* 16px未満だとiOS Safariがフォーカス時に自動ズームする */
     text-transform: none;
 }
 .setting-item input:focus, #graph-type-select:focus { border-color: var(--trace); box-shadow: 0 0 0 3px var(--trace-dim); }
@@ -808,7 +817,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, label:focus-vis
 }
 
 /* ---- iPad / レスポンシブ ------------------------------------------ */
-@media (max-width: 1024px) {
+/* デバイス決め打ち(1024px)をやめコンテンツ基準に。iPad横向き(=1024px)は2カラムを
+   維持し、縦向き(768〜834px)やSplit Viewで狭めた場合だけこの段が受ける */
+@media (max-width: 900px) {
     .workspace { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
     .sidebar-section {
         display: grid;
@@ -819,7 +830,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, label:focus-vis
     .data-panel { grid-column: span 2; max-height: 220px; }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 600px) {
     .sidebar-section { grid-template-columns: 1fr; }
     .data-panel { grid-column: span 1; }
     .app-header h1 { font-size: 0.95rem; }
@@ -829,3 +840,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, label:focus-vis
 @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; animation: none !important; }
 }
+
+/* ---- タッチ操作の既定 ---------------------------------------------- */
+/* キャンバスは自前のパン/ピンチ実装。ブラウザ標準ジェスチャと競合させない */
+.canvas-container, #tracker-canvas { touch-action: none; }
+/* 操作要素はダブルタップズーム抑止（クリック遅延も解消） */
+button, .btn, .btn-icon, .obj-btn, .btn-confirm, label,
+input, summary, .data-table tr { touch-action: manipulation; }

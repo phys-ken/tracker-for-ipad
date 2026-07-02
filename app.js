@@ -31,7 +31,9 @@ const appState = {
     },
     targetColor: null,        // { r, g, b } サンプリングされた色
     isAutoTracking: false,    // 自動追跡実行フラグ
-    selectedPointId: null     // 現在選択されているトラックポイントのID
+    selectedPointId: null,    // 現在選択されているトラックポイントのID
+    videoName: null,          // 現在読み込み中の動画のファイル名（復元判定の指紋用）
+    videoSize: 0              // 同・ファイルサイズ(bytes)
 };
 
 // グローバル（window）に公開してテストスイートからアクセス可能にする
@@ -117,6 +119,8 @@ function updateUndoButton() {
 }
 
 // localStorage への自動保存（動画自体は保存せず、計測データと校正のみ）
+// video フィンガープリント(名前・サイズ・長さ)も併せて保存し、次回同じ動画を
+// 読み込んだ時だけ復元を提案できるようにする。
 function persistState() {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -124,26 +128,84 @@ function persistState() {
             calibration: appState.calibration,
             videoFps: appState.videoFps,
             trackingStepSize: appState.trackingStepSize,
-            activeObjectId: appState.activeObjectId
+            activeObjectId: appState.activeObjectId,
+            video: {
+                name: appState.videoName,
+                size: appState.videoSize,
+                duration: appState.videoDuration
+            }
         }));
     } catch (e) { /* プライベートモード等では無視 */ }
 }
 
-function loadPersistedState() {
+// 新しい動画を読み込む直前に呼ぶ：前回の計測データ・校正・Undo履歴・選択状態を
+// 全リセットする（「前回データの中途半端な干渉」対策）。表示も同期する。
+function resetForNewVideo() {
+    appState.trackingData = [];
+    appState.calibration = {
+        origin: null,
+        scaleRatio: null,
+        scaleStart: null,
+        scaleEnd: null,
+        scaleActual: 0,
+        scaleTempStart: null
+    };
+    undoStack.length = 0;
+    setSelectedPoint(null);
+    updateDataTable();
+    updateGraph();
+    refreshCalibrationLabels();
+    updateUndoButton();
+}
+
+// 保存データのフィンガープリント(名前・サイズ・長さ±0.1s)が現在の動画と一致するか判定
+function persistedFingerprintMatches(obj) {
+    const v = obj && obj.video;
+    return !!v
+        && v.name === appState.videoName
+        && v.size === appState.videoSize
+        && typeof v.duration === 'number'
+        && Math.abs(v.duration - appState.videoDuration) <= 0.1
+        && Array.isArray(obj.trackingData)
+        && obj.trackingData.length > 0;
+}
+
+// 動画の指紋が前回保存データと一致する場合のみ「復元しますか？」を提案する。
+// 一致しない場合は黙って古いデータを破棄する（中途半端な干渉を残さないため）。
+function offerRestoreIfMatching() {
+    let obj = null;
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (!raw) return false;
-        const obj = JSON.parse(raw);
-        if (Array.isArray(obj.trackingData) && obj.trackingData.length > 0) {
+        if (!raw) return;
+        obj = JSON.parse(raw);
+    } catch (e) { return; }
+    if (!obj) return;
+
+    if (!persistedFingerprintMatches(obj)) {
+        try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* 無視 */ }
+        return;
+    }
+
+    showConfirmDialog(
+        "前回の計測データを復元しますか？",
+        `同じ動画（${appState.videoName}）の前回の計測データが見つかりました。復元しますか？`,
+        () => {
             appState.trackingData = obj.trackingData;
             if (obj.calibration) appState.calibration = obj.calibration;
             if (obj.videoFps) appState.videoFps = obj.videoFps;
             if (obj.trackingStepSize) appState.trackingStepSize = obj.trackingStepSize;
             if (obj.activeObjectId) appState.activeObjectId = obj.activeObjectId;
-            return true;
+            updateDataTable();
+            updateGraph();
+            refreshCalibrationLabels();
+            updateUndoButton();
+            logDebug("前回の計測データを復元しました。");
+        },
+        () => {
+            try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* 無視 */ }
+            logDebug("前回データの復元を見送り、破棄しました。");
         }
-    } catch (e) { /* 破損データは無視 */ }
-    return false;
+    );
 }
 
 // 校正ラベル（原点/スケール表示）を現在の状態に同期
@@ -183,13 +245,8 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('resize', handleResize);
     window.addEventListener('resize', updateGraph);
 
-    // 前回の作業（計測データ・校正）を自動復帰。動画は再選択が必要。
-    if (loadPersistedState()) {
-        logDebug("前回の計測データを復帰しました（動画は読み込み直してください）。");
-        refreshCalibrationLabels();
-        updateDataTable();
-        updateGraph();
-    }
+    // 起動時の無条件復帰は廃止。動画読込時にフィンガープリントが一致した場合のみ
+    // offerRestoreIfMatching() が復元を提案する（setupFileUpload / setupSampleLoad 参照）。
     updateUndoButton();
     updateActionHint();
     updateStepGuide();
@@ -219,6 +276,11 @@ function loadSampleVideo() {
             if (appState.videoElement.src && appState.videoElement.src.startsWith('blob:')) {
                 URL.revokeObjectURL(appState.videoElement.src);
             }
+            // 新しい動画を読み込む前に、前回データの中途半端な干渉を防ぐため全リセット
+            resetForNewVideo();
+            appState.videoName = 'sample.mp4';
+            appState.videoSize = blob.size;
+
             const url = URL.createObjectURL(blob);
             const hintOverlay = document.getElementById('hint-overlay');
             if (hintOverlay) hintOverlay.style.opacity = '0';
@@ -267,11 +329,16 @@ function setupFileUpload() {
             if (!file) return;
             
             logDebug(`ファイル選択: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
-            
+
             if (appState.videoElement.src && appState.videoElement.src.startsWith('blob:')) {
                 URL.revokeObjectURL(appState.videoElement.src);
             }
-            
+
+            // 新しい動画を読み込む前に、前回データの中途半端な干渉を防ぐため全リセット
+            resetForNewVideo();
+            appState.videoName = file.name;
+            appState.videoSize = file.size;
+
             const fileUrl = URL.createObjectURL(file);
             if (hintOverlay) hintOverlay.style.opacity = '0';
 
@@ -303,6 +370,9 @@ function setupFileUpload() {
         handleResize();
         updateGraph();
         updateStepGuide();
+
+        // 動画の指紋(名前・サイズ・長さ)が前回保存データと一致する場合のみ復元を提案
+        offerRestoreIfMatching();
 
         // 読込直後に全フレームをシーク走査し、実フレーム時刻表＋重複除外を確定して先頭へ
         startFrameScan();
@@ -2098,6 +2168,40 @@ function showInputDialog(title, bodyText, defaultValue, onOk) {
     
     document.getElementById('dialog-btn-cancel').addEventListener('click', () => {
         cleanup();
+    });
+}
+
+// 確認専用ダイアログ（入力欄なし、OK/キャンセルのコールバックのみ）
+function showConfirmDialog(title, bodyText, onOk, onCancel) {
+    const overlay = document.getElementById('dialog-overlay');
+    const titleEl = document.getElementById('dialog-title');
+    const bodyEl = document.getElementById('dialog-body');
+    const btnCancel = document.getElementById('dialog-btn-cancel');
+    const btnOk = document.getElementById('dialog-btn-ok');
+
+    if (!overlay) return;
+
+    titleEl.textContent = title;
+    bodyEl.innerHTML = `<p>${bodyText}</p>`;
+
+    overlay.style.display = 'flex';
+
+    const cleanup = () => {
+        overlay.style.display = 'none';
+        const newOk = btnOk.cloneNode(true);
+        const newCancel = btnCancel.cloneNode(true);
+        btnOk.parentNode.replaceChild(newOk, btnOk);
+        btnCancel.parentNode.replaceChild(newCancel, btnCancel);
+    };
+
+    document.getElementById('dialog-btn-ok').addEventListener('click', () => {
+        cleanup();
+        if (onOk) onOk();
+    });
+
+    document.getElementById('dialog-btn-cancel').addEventListener('click', () => {
+        cleanup();
+        if (onCancel) onCancel();
     });
 }
 
