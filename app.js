@@ -2064,7 +2064,13 @@ function physCoordOf(p) {
     return { x, y, t: p.time, frame: p.frame, id: p.id };
 }
 
-// 中心差分で速度・加速度を数値微分（端点は片側差分）
+// 中心差分で速度・加速度を数値微分（端点は片側差分）。
+// トラッキングは毎コマ打つとは限らず、コマ飛ばし（ステップ幅>1・手動ジャンプ）で
+// 前後の間隔 h0=t[i]-t[i-1] と h1=t[i+1]-t[i] が不揃いになることが普通にある。
+// 単純な (y[i+1]-y[i-1])/(t[i+1]-t[i-1]) は h0=h1 のときしか正しくなく、
+// 不揃いだと点ごとに符号・大きさが変わる誤差が乗ってガタつく。
+// 不等間隔に対応した3点公式（h0=h1なら現行式と完全一致、等加速度運動なら
+// 間隔がどれだけ不揃いでも理論上厳密値になる）に置き換える。
 function computeKinematics(sortedData) {
     const pts = sortedData.map(physCoordOf);
     const n = pts.length;
@@ -2073,7 +2079,10 @@ function computeKinematics(sortedData) {
         if (n === 1) return 0;
         if (i === 0)       return (arr[1] - arr[0]) / ((t[1] - t[0]) || 1e-9);
         if (i === n - 1)   return (arr[n - 1] - arr[n - 2]) / ((t[n - 1] - t[n - 2]) || 1e-9);
-        return (arr[i + 1] - arr[i - 1]) / ((t[i + 1] - t[i - 1]) || 1e-9);
+        const h0 = t[i] - t[i - 1], h1 = t[i + 1] - t[i];
+        const denom = h0 * h1 * (h0 + h1);
+        if (!denom) return (arr[i + 1] - arr[i - 1]) / ((t[i + 1] - t[i - 1]) || 1e-9);
+        return (h0 * h0 * (arr[i + 1] - arr[i]) + h1 * h1 * (arr[i] - arr[i - 1])) / denom;
     });
     const x = pts.map(p => p.x), y = pts.map(p => p.y);
     const vx = deriv(x), vy = deriv(y);
@@ -2671,6 +2680,7 @@ if (typeof module !== 'undefined') {
         seekToFrame,
         stepFrame,
         sampleColor,
+        computeKinematics,
         test_setVars
     };
 }

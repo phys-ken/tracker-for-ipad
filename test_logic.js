@@ -139,5 +139,38 @@ const color2 = { r: 105, g: 148, b: 202 };
 const diff = Math.hypot(color1.r - color2.r, color1.g - color2.g, color1.b - color2.b);
 assertClose(diff, Math.sqrt(5 * 5 + 2 * 2 + 2 * 2), 0.001, "色差(RGBユークリッド距離)が正確");
 
+// --- 不等間隔サンプリングでの速度・加速度（計算式そのものの妥当性） ---
+// コマ飛ばし（ステップ幅>1・手動ジャンプ）で前後の間隔が不揃いになっても、
+// 等加速度運動なら数値微分が理論値と厳密に一致すること（不等間隔3点公式の検証）。
+// 単純な中心差分 (y[i+1]-y[i-1])/(t[i+1]-t[i-1]) は間隔が不揃いだと誤差が乗る。
+{
+    const G = 980; // cm/s^2
+    const V0 = 150; // cm/s（水平方向の等速運動も同時に検証）
+    // わざと不揃いな間隔にする（1コマ相当・10コマ相当が混在する状況を模す）
+    const ts = [0, 0.017, 0.033, 0.20, 0.22, 0.45, 0.47, 0.49, 0.80];
+    const sortedData = ts.map((t, i) => ({
+        x: V0 * t,               // 等速: 真の vx は常に V0, ax は常に0
+        y: 0.5 * G * t * t,      // 等加速度: 真の vy=G*t, ay は常にG
+        time: t, frame: i, id: i
+    }));
+    const kin = app.computeKinematics(sortedData);
+    // 端点(最初・最後)は片側差分（区間平均）なので理論の瞬間値とは一致しない。
+    // 中間点(i=1..n-2)は速度が理論値と厳密一致するはず。
+    for (let i = 1; i < kin.length - 1; i++) {
+        assertClose(kin[i].vx, V0, 1e-6,
+            `不等間隔でも vx が理論値と厳密一致 (i=${i}, Δt不揃い)`);
+        assertClose(kin[i].vy, G * ts[i], 1e-6,
+            `不等間隔でも vy が理論値と厳密一致 (i=${i}, Δt不揃い)`);
+    }
+    // 加速度は速度をもう一度微分するため、速度側の端点(片側差分で近似)に触れる
+    // i=1 と i=n-2 は誤差が乗りうる。両端に触れない内側(i=2..n-3)だけ厳密一致を検証。
+    for (let i = 2; i < kin.length - 2; i++) {
+        assertClose(kin[i].ax, 0, 1e-6,
+            `不等間隔でも ax=0 が厳密一致 (i=${i})`);
+        assertClose(kin[i].ay, G, 1e-6,
+            `不等間隔でも ay=g が厳密一致 (i=${i})`);
+    }
+}
+
 console.log("=== 全ロジックテスト合格 ===");
 process.exit(0);
