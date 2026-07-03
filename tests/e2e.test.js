@@ -216,6 +216,14 @@ async function waitUntil(cdp, S, expr, timeoutMs, label) {
             ax.checked=true; ax.dispatchEvent(new Event('change',{bubbles:true}));
             return [...document.querySelectorAll('#graph-stack canvas')].map(c=>c.dataset.type);`);
         ok(g1.length === 3 && g1[2] === 'a-t', `チェック追加でグラフが3枚に増える [${g1.join(',')}]`);
+
+        // グラフ3枚でも .graph-stack 単体が二重スクロールしない（サイドバー全体の1本スクロールに統一）
+        const stackFit = await evalExpr(cdp, S, `(()=>{
+            const st = document.getElementById('graph-stack');
+            return { sh: st.scrollHeight, ch: st.clientHeight };
+        })()`);
+        ok(stackFit.sh <= stackFit.ch + 2, `グラフ3枚でも.graph-stackが二重スクロールしない (scrollHeight ${stackFit.sh} <= clientHeight ${stackFit.ch})`);
+
         await evalAsync(cdp, S, `const ax=document.querySelector('#graph-type-checklist input[value="a-t"]');
             ax.checked=false; ax.dispatchEvent(new Event('change',{bubbles:true})); return true;`);
 
@@ -248,6 +256,22 @@ async function waitUntil(cdp, S, expr, timeoutMs, label) {
         ok(flow.dlgShown && flow.scaleSet && isFinite(flow.scaleRatio) && flow.scaleRatio > 0,
             `スケールを設定できた (${flow.scaleRatio ? flow.scaleRatio.toFixed(4) : 'n/a'} cm/px)`);
         ok(flow.tracked >= 3, `トラック点を複数登録できた (${flow.tracked}点, 確定で自動コマ送り)`);
+
+        // 既存点の上書き（修正作業）は自動コマ送りしない。その場に留まる。
+        const overwrite = await evalAsync(cdp, S, `
+            const s = window.appState;
+            window.seekToFrame(0);
+            await new Promise(r=>setTimeout(r,80));
+            const before = s.currentFrame;
+            const countBefore = s.trackingData.length;
+            window.confirmAtCrosshair(); // frame0には既存点がある → 上書き
+            await new Promise(r=>setTimeout(r,80));
+            return { before, after: s.currentFrame, countBefore, countAfter: s.trackingData.length };
+        `);
+        ok(overwrite.before === 0 && overwrite.after === 0,
+            `既存点の上書き時は自動コマ送りしない (frame ${overwrite.before}→${overwrite.after})`);
+        ok(overwrite.countBefore === overwrite.countAfter,
+            `上書きは点数を増やさない (${overwrite.countBefore}→${overwrite.countAfter})`);
 
         // 出力: エクスポートダイアログの TSV にヘッダと行が入る
         const exp = await evalAsync(cdp, S, `

@@ -18,7 +18,7 @@ import os
 FPS = 60
 SHIFT = 4          # cv2のサブピクセル描画（微小移動でも画素が滑らかに変わる）
 BG = (22, 18, 15)          # BGR: 暗室グラファイト(#0F1216)
-BAR = (163, 149, 138)      # BGR: muted(#8A95A3)
+BAR = (235, 230, 225)      # BGR: 明るいオフホワイト（校正バーは目立たせる。muted(#8A95A3)より高コントラスト）
 AMBER = (39, 182, 255)     # BGR: 物体1 シグナル・アンバー(#FFB627)
 CYAN = (230, 169, 90)      # BGR: 物体2 シアン(#5AA9E6)
 
@@ -32,13 +32,20 @@ def new_frame(w, h):
 
 
 def draw_scale_bar(f, x, y, px_per_m):
-    """「1 m」のスケールバー（両端にティック）"""
+    """「1 m」のスケールバー（両端＋中央50cmにティック、太め・高コントラストで目立たせる）"""
     x2 = x + px_per_m
-    cv2.line(f, (x, y), (x2, y), BAR, 2, cv2.LINE_AA)
-    for xt in (x, x2):
-        cv2.line(f, (xt, y - 7), (xt, y + 7), BAR, 2, cv2.LINE_AA)
-    cv2.putText(f, "1 m", (x + px_per_m // 2 - 18, y - 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, BAR, 1, cv2.LINE_AA)
+    xm = x + px_per_m // 2
+    cv2.line(f, (x, y), (x2, y), BAR, 3, cv2.LINE_AA)
+    for xt, half in ((x, 9), (x2, 9), (xm, 6)):  # 両端は長め、中央(50cm)は短めのティック
+        cv2.line(f, (xt, y - half), (xt, y + half), BAR, 3, cv2.LINE_AA)
+    label = "1 m"
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+    lx, ly = xm - tw // 2, y - 14
+    # 文字の視認性を上げる半透明の背景板
+    overlay = f.copy()
+    cv2.rectangle(overlay, (lx - 6, ly - th - 5), (lx + tw + 6, ly + 5), BG, -1)
+    cv2.addWeighted(overlay, 0.65, f, 0.35, 0, f)
+    cv2.putText(f, label, (lx, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.6, BAR, 2, cv2.LINE_AA)
 
 
 def ball(f, x, y, r, color):

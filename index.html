@@ -185,7 +185,7 @@
                 </details>
 
                 <!-- Realtime Graph Panel (複数表示・縦積み) -->
-                <div class="panel graph-panel" style="min-height: 200px;">
+                <div class="panel graph-panel">
                     <div class="panel-header-row" style="border:none; padding:0;">
                         <h2>リアルタイムグラフ</h2>
                         <span class="graph-hint-label">表示する量を選択</span>
@@ -245,11 +245,17 @@
         <div class="action-bar">
             <div class="action-hint" id="action-hint">十字を対象に合わせて「確定」</div>
             <div class="action-buttons">
-                <button class="btn-icon btn-jog" id="btn-undo" title="元に戻す" disabled>
+                <button class="btn-icon btn-jog" id="btn-undo" title="直前の操作を取り消す" disabled>
                     <span class="material-icons-round">undo</span>
+                    <span class="jog-label">取消</span>
+                </button>
+                <button class="btn-icon btn-jog" id="btn-prev-10" title="10コマ戻る">
+                    <span class="material-icons-round">fast_rewind</span>
+                    <span class="jog-label">‹10</span>
                 </button>
                 <button class="btn-icon btn-jog" id="btn-prev-1" title="1コマ戻る">
                     <span class="material-icons-round">chevron_left</span>
+                    <span class="jog-label">‹1</span>
                 </button>
                 <button class="btn-confirm" id="btn-confirm">
                     <span class="material-icons-round">add_location_alt</span>
@@ -257,9 +263,11 @@
                 </button>
                 <button class="btn-icon btn-jog" id="btn-next-1" title="1コマ進む">
                     <span class="material-icons-round">chevron_right</span>
+                    <span class="jog-label">1›</span>
                 </button>
                 <button class="btn-icon btn-jog" id="btn-next-10" title="10コマ進む">
                     <span class="material-icons-round">forward_10</span>
+                    <span class="jog-label">10›</span>
                 </button>
             </div>
         </div>

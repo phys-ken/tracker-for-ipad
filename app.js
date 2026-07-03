@@ -286,7 +286,13 @@ function showSampleDialog() {
              <span class="material-icons-round">smart_display</span>
              ${s.name}<span style="margin-left:auto; font-size:0.72rem; color:#8A95A3;">${s.hint}</span>
          </button>`).join('');
-    showInputDialog('サンプル動画を選ぶ', `<div>${items}</div>`, '', () => {});
+    const body = `
+        <p style="margin-bottom:8px; font-size:0.8rem; color:#8A95A3;">
+            どの動画にも画面下に「1 m」のスケールバーがあります。まずそのバーで
+            スケール設定してから測ってください。
+        </p>
+        <div>${items}</div>`;
+    showInputDialog('サンプル動画を選ぶ', body, '', () => {});
     document.querySelectorAll('.sample-item').forEach(el => {
         el.addEventListener('click', () => {
             const s = SAMPLE_LIST[parseInt(el.dataset.idx)];
@@ -1057,6 +1063,14 @@ function frameIndexOfTime(t) {
     return Math.min(lo, appState.totalFrames);
 }
 
+// 「今まさに画面に表示されているコマ」を返す。シーク直列化キューは要求時点で
+// appState.currentFrame を先に進めるため、連打・素早い操作では表示が追いつかず
+// 食い違うことがある（進む→即確定、で違うコマに点が付く）。確定・校正はこちらを
+// 信頼する（見えているものと記録が必ず一致する）。
+function displayedFrame() {
+    return frameIndexOfTime(appState.videoElement.currentTime);
+}
+
 function playVideo() {
     appState.isPlaying = true;
     setPlayPauseIcon(true);
@@ -1526,6 +1540,17 @@ function confirmAtCrosshair() {
     }
     const vPos = getCrosshairVideoCoord();
 
+    // シーク要求中でも「今画面に見えているコマ」に記録する（要求先の未来コマではない）。
+    // ここでUI(コマ番号・スライダ)も実態に合わせて同期しておく。
+    const shown = displayedFrame();
+    if (shown !== appState.currentFrame) {
+        appState.currentFrame = shown;
+        const slider = document.getElementById('frame-slider');
+        if (slider) slider.value = shown;
+        const lblFrame = document.getElementById('lbl-frame');
+        if (lblFrame) lblFrame.textContent = shown;
+    }
+
     if (appState.pendingCapture === 'origin') {
         captureOrigin(vPos);
     } else if (appState.pendingCapture === 'scale') {
@@ -1559,13 +1584,15 @@ function captureTrackPoint(vPos) {
         logDebug(`色をサンプリングしました: RGB(${appState.targetColor.r}, ${appState.targetColor.g}, ${appState.targetColor.b})`);
     }
 
-    logDebug(`ポイント登録: Frame ${appState.currentFrame}, X: ${vPos.x.toFixed(1)}, Y: ${vPos.y.toFixed(1)}`);
+    logDebug(`ポイント登録: Frame ${appState.currentFrame}, X: ${vPos.x.toFixed(1)}, Y: ${vPos.y.toFixed(1)}`
+        + (existingIndex >= 0 ? '（上書き）' : ''));
     persistState();
     updateDataTable();
     drawVideoFrame();
     updateGraph();
 
-    stepFrame(appState.trackingStepSize);
+    // 新規点は従来通り自動コマ送り。既存点の上書き(修正作業)はその場に留まり結果を確認できる。
+    if (existingIndex < 0) stepFrame(appState.trackingStepSize);
 }
 
 function captureOrigin(vPos) {
@@ -2615,6 +2642,7 @@ window.loadSampleByUrl = loadSampleByUrl;
 window.generateStrobe = generateStrobe;
 window.strobePoints = strobePoints;
 window.frameIndexOfTime = frameIndexOfTime;
+window.displayedFrame = displayedFrame;
 window.buildFrameTimeTable = buildFrameTimeTable;
 window.seekToFrame = seekToFrame;
 window.stepFrame = stepFrame;

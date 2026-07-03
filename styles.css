@@ -336,6 +336,9 @@ body {
     flex-direction: column;
     gap: 10px;
     box-shadow: var(--shadow);
+    /* サイドバー全体は1本のスクロールで見せる。各パネルは中身なりの高さを保ち、
+       他パネルに押されて圧縮されない（圧縮されるとグラフ等が内部で二重スクロールする） */
+    flex-shrink: 0;
 }
 
 /* セクション見出し = 計器のラベル（左に小さなアンバーの目印） */
@@ -435,7 +438,7 @@ details.panel-collapsible[open] > summary h2::after { transform: rotate(180deg);
 .cal-row span:last-child { font-family: var(--font-mono); color: var(--cyan); font-weight: 500; }
 
 /* ---- データパネル & テーブル ------------------------------------- */
-.data-panel { flex: 1; min-height: 160px; }
+.data-panel { min-height: 160px; }
 
 .panel-header-row {
     display: flex;
@@ -589,8 +592,18 @@ details.panel-collapsible[open] > summary h2::after { transform: rotate(180deg);
 
 .action-buttons { display: flex; align-items: center; justify-content: center; gap: 10px; }
 
-.btn-jog { width: 54px; height: 54px; border-radius: var(--radius); }
-.btn-jog .material-icons-round { font-size: 1.6rem; }
+.btn-jog {
+    width: 54px; height: 54px; border-radius: var(--radius);
+    flex-direction: column; gap: 1px;
+}
+.btn-jog .material-icons-round { font-size: 1.35rem; }
+.btn-jog .jog-label {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+    line-height: 1;
+}
 .btn-jog:disabled { opacity: 0.35; cursor: default; }
 
 .btn-confirm {
@@ -835,6 +848,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, label:focus-vis
     .data-panel { grid-column: span 1; }
     .app-header h1 { font-size: 0.95rem; }
     .btn-confirm { min-width: 180px; }
+    .action-buttons { gap: 4px; }
+    .btn-jog { width: 46px; height: 46px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
