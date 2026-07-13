@@ -139,6 +139,10 @@
                             <span class="material-icons-round">linear_scale</span>
                             スケール設定
                         </button>
+                        <button class="btn btn-secondary" id="btn-set-slowmo">
+                            <span class="material-icons-round">slow_motion_video</span>
+                            スロー設定
+                        </button>
                     </div>
                     <div class="calibration-info">
                         <div class="cal-row">
@@ -148,6 +152,10 @@
                         <div class="cal-row">
                             <span>スケール:</span>
                             <span id="info-scale">未設定</span>
+                        </div>
+                        <div class="cal-row">
+                            <span>スロー:</span>
+                            <span id="info-slowmo">通常速度</span>
                         </div>
                     </div>
                 </div>
@@ -203,6 +211,12 @@
                         <label><input type="checkbox" value="a-t">a-t</label>
                         <label><input type="checkbox" value="ax-t">ax-t</label>
                         <label><input type="checkbox" value="ay-t">ay-t</label>
+                    </div>
+                    <div class="graph-hint-label" style="margin-top:6px;">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                            <input type="checkbox" id="chk-raw-kinematics">
+                            生データ表示（速度・加速度のスムージングを無効化）
+                        </label>
                     </div>
                     <div class="graph-stack" id="graph-stack"></div>
                 </div>
@@ -279,7 +293,7 @@
             </button>
             <div class="debug-console" id="debug-console" style="display: none;">
                 <div class="debug-header">
-                    <span>Console Output</span>
+                    <span>Console Output <span id="app-version-label" style="opacity:.6;font-weight:normal;"></span></span>
                     <button class="btn-clear" id="btn-clear-debug">Clear</button>
                 </div>
                 <div class="debug-log-list" id="debug-log-list"></div>
@@ -307,6 +321,7 @@
     <!-- 依存ライブラリは同梱(学校MDMフィルタ・教室Wi-Fi対策) -->
     <script src="vendor/xlsx.full.min.js"></script>
     <script src="vendor/mp4box.all.min.js"></script>
-    <script src="app.js"></script>
+    <!-- ?v= はapp.js先頭のAPP_VERSIONと同じ文字列に手動で合わせる（キャッシュ回避のヒント） -->
+    <script src="app.js?v=2026-07-13a"></script>
 </body>
 </html>

@@ -1,6 +1,12 @@
 // Physics Tracker - app.js
 // iPadおよび各種ブラウザ向け動画解析ウェブアプリコアロジック
 
+// 意味のある修正をリリースするたびに手動で更新する。index.html の
+// <script src="app.js?v=..."> のクエリ値も同じ文字列に合わせること
+// （キャッシュされた古いapp.jsで測定していないかを見分けるための唯一の手がかり）。
+const APP_VERSION = '2026-07-13a';
+window.APP_VERSION = APP_VERSION;
+
 // --- 状態管理を一元化 ---
 const appState = {
     videoElement: null,
@@ -35,7 +41,15 @@ const appState = {
     videoName: null,          // 現在読み込み中の動画のファイル名（復元判定の指紋用）
     videoSize: 0,             // 同・ファイルサイズ(bytes)
     rangeIn: 0,               // 解析範囲の開始コマ（イン点）
-    rangeOut: 0               // 解析範囲の終了コマ（アウト点）
+    rangeOut: 0,               // 解析範囲の終了コマ（アウト点）
+    // スロー動画対応: コンテナが自己申告するfps(=videoFps、シークにはこれを使い続ける)と、
+    // 実際にその場で起きていた物理時間は、スロー撮影を書き出す過程で乖離することがある
+    // （高fps撮影を見かけ上のfpsに"フラット化"して書き出す挙動。詳細はDESIGN.md StageE参照）。
+    // physicsFpsMultiplier = 真の撮影fps ÷ videoFps。既定1（補正なし）。
+    // frameTimeOf(物理時間)だけに乗算し、seekTimeOf(動画シーク)は絶対に触らない。
+    physicsFpsMultiplier: 1,
+    slowMotionCaptureFps: null, // ユーザーが入力した「実際の撮影fps」。未設定ならnull
+    rawKinematics: false // true=速度・加速度のスムージングを無効化し従来の厳密差分を使う
 };
 
 // グローバル（window）に公開してテストスイートからアクセス可能にする
@@ -131,6 +145,8 @@ function persistState() {
             videoFps: appState.videoFps,
             trackingStepSize: appState.trackingStepSize,
             activeObjectId: appState.activeObjectId,
+            physicsFpsMultiplier: appState.physicsFpsMultiplier,
+            slowMotionCaptureFps: appState.slowMotionCaptureFps,
             video: {
                 name: appState.videoName,
                 size: appState.videoSize,
@@ -152,6 +168,8 @@ function resetForNewVideo() {
         scaleActual: 0,
         scaleTempStart: null
     };
+    appState.physicsFpsMultiplier = 1;
+    appState.slowMotionCaptureFps = null;
     undoStack.length = 0;
     setSelectedPoint(null);
     updateDataTable();
@@ -197,6 +215,8 @@ function offerRestoreIfMatching() {
             if (obj.videoFps) appState.videoFps = obj.videoFps;
             if (obj.trackingStepSize) appState.trackingStepSize = obj.trackingStepSize;
             if (obj.activeObjectId) appState.activeObjectId = obj.activeObjectId;
+            if (obj.physicsFpsMultiplier) appState.physicsFpsMultiplier = obj.physicsFpsMultiplier;
+            if (obj.slowMotionCaptureFps) appState.slowMotionCaptureFps = obj.slowMotionCaptureFps;
             updateDataTable();
             updateGraph();
             refreshCalibrationLabels();
@@ -210,19 +230,28 @@ function offerRestoreIfMatching() {
     );
 }
 
-// 校正ラベル（原点/スケール表示）を現在の状態に同期
+// 校正ラベル（原点/スケール/スロー表示）を現在の状態に同期
 function refreshCalibrationLabels() {
     const o = appState.calibration.origin;
     const infoO = document.getElementById('info-origin');
     if (infoO) infoO.textContent = o ? `(${o.x.toFixed(0)}, ${o.y.toFixed(0)})` : '未設定';
     const infoS = document.getElementById('info-scale');
     if (infoS) infoS.textContent = appState.calibration.scaleRatio ? `${appState.calibration.scaleRatio.toFixed(3)} cm/px` : '未設定';
+    const infoM = document.getElementById('info-slowmo');
+    if (infoM) {
+        infoM.textContent = appState.slowMotionCaptureFps
+            ? `${appState.slowMotionCaptureFps}fps撮影 (${appState.physicsFpsMultiplier.toFixed(2)}倍補正)`
+            : '通常速度';
+    }
 }
 
 // --- DOM初期化 ---
 document.addEventListener('DOMContentLoaded', () => {
     logDebug("アプリケーション起動");
-    
+    logDebug(`バージョン: ${APP_VERSION}`);
+    const verLabel = document.getElementById('app-version-label');
+    if (verLabel) verLabel.textContent = `v${APP_VERSION}`;
+
     appState.videoElement = document.getElementById('hidden-video');
     appState.canvas = document.getElementById('tracker-canvas');
     appState.ctx = appState.canvas.getContext('2d');
@@ -244,6 +273,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupDeletionEvent();
     setupUndo();
     setupFpsInput();
+    setupSlowMotionUI();
 
     // ウィンドウリサイズ時の処理
     window.addEventListener('resize', handleResize);
@@ -395,20 +425,20 @@ function setupFileUpload() {
         });
     }
     
-    appState.videoElement.addEventListener('loadedmetadata', () => {
+    appState.videoElement.addEventListener('loadedmetadata', async () => {
         appState.videoDuration = appState.videoElement.duration;
         appState.totalFrames = Math.floor(appState.videoDuration * appState.videoFps);
         appState.currentFrame = 0;
-        
+
         logDebug(`動画ロード完了: 長さ ${appState.videoDuration.toFixed(2)}s, 総フレーム数 ${appState.totalFrames} (FPS: ${appState.videoFps})`);
-        
+
         const slider = document.getElementById('frame-slider');
         if (slider) {
             slider.disabled = false;
             slider.max = appState.totalFrames;
             slider.value = 0;
         }
-        
+
         refreshFpsUI();
         updateTimeDisplay();
         handleResize();
@@ -419,7 +449,19 @@ function setupFileUpload() {
         offerRestoreIfMatching();
 
         // 読込直後に全フレームをシーク走査し、実フレーム時刻表＋重複除外を確定して先頭へ
-        startFrameScan();
+        await startFrameScan();
+
+        // コンテナfpsが確定した後、スロー撮影の痕跡を軽く探す（ベストエフォート）。
+        // 既にスロー設定済み、または他のダイアログ(復元確認等)が開いている最中は出さない。
+        if (!appState.slowMotionCaptureFps) {
+            const hinted = await detectSlowMotionHint(appState.videoBlob);
+            const overlay = document.getElementById('dialog-overlay');
+            const dialogBusy = overlay && overlay.style.display === 'flex';
+            if (hinted && !dialogBusy && !appState.slowMotionCaptureFps) {
+                logDebug('スロー撮影の痕跡を検出しました。設定を確認してください。');
+                openSlowMotionDialog(true);
+            }
+        }
     });
     
     appState.videoElement.addEventListener('canplay', () => {
@@ -783,14 +825,17 @@ function buildFrameTimeTable(times) {
     return out;
 }
 
-// コマ番号 → そのフレームの実時刻（s）。表が無ければ fps 換算にフォールバック。
+// コマ番号 → そのフレームの物理時刻（s）。表が無ければ fps 換算にフォールバック。
+// physicsFpsMultiplier(既定1)で補正する。スロー動画がコンテナ上は見かけのfpsを
+// 名乗りつつ、実際の経過時間はもっと短い（真の撮影fpsの方が高い）ケースに対応するため。
+// この関数の戻り値だけが運動学計算(computeKinematics)やストロボの時間基準に使われ、
+// 動画そのもののシーク(seekTimeOf)には一切影響しない＝コマ送りや再生位置は今まで通り正確。
 function frameTimeOf(i) {
     const ft = appState.frameTimes;
-    if (ft && ft.length) {
-        const n = Math.max(0, Math.min(ft.length - 1, i));
-        return ft[n];
-    }
-    return i / appState.videoFps;
+    const containerT = (ft && ft.length)
+        ? ft[Math.max(0, Math.min(ft.length - 1, i))]
+        : i / appState.videoFps;
+    return containerT / (appState.physicsFpsMultiplier || 1);
 }
 
 // コマ番号 → シーク先の currentTime（s）。表があればフレーム表示区間の中央を狙い、
@@ -841,6 +886,101 @@ function setupFpsInput() {
     if (input) {
         input.addEventListener('change', (e) => setFpsManual(e.target.value));
     }
+}
+
+// --- スロー動画の物理時間補正 ------------------------------------------
+// 「実際に撮影したfps」を入力させ、コンテナの見かけfps(videoFps)との比を
+// physicsFpsMultiplierとして保持する。videoFps自体（シークに使う）は触らない。
+// val が空/不正なら補正なし(1倍)に戻す。
+function setSlowMotionCaptureFps(val) {
+    const trueFps = parseFloat(val);
+    if (!val || isNaN(trueFps) || trueFps <= 0) {
+        appState.physicsFpsMultiplier = 1;
+        appState.slowMotionCaptureFps = null;
+        logDebug('スロー補正を解除しました（通常速度として扱います）');
+    } else {
+        appState.physicsFpsMultiplier = trueFps / appState.videoFps;
+        appState.slowMotionCaptureFps = Math.round(trueFps * 100) / 100;
+        logDebug(`スロー補正を設定: 撮影${appState.slowMotionCaptureFps}fps ÷ コンテナ${appState.videoFps}fps = ${appState.physicsFpsMultiplier.toFixed(3)}倍`);
+    }
+    // 既存点の物理時刻を再計算（スケール変更時と同じパターン）
+    appState.trackingData.forEach(p => { p.time = frameTimeOf(p.frame); });
+    refreshCalibrationLabels();
+    persistState();
+    updateDataTable();
+    updateGraph();
+}
+
+// スロー設定ダイアログを開く。hintedがtrueなら「検出されたので確認してほしい」文面にする。
+function openSlowMotionDialog(hinted) {
+    const current = appState.slowMotionCaptureFps;
+    const intro = hinted
+        ? `この動画にはスロー撮影の痕跡（QuickTimeの再生意図メタデータ）が見つかりました。<br>
+           見かけ上は${appState.videoFps}fpsですが、実際はもっと高いfpsで撮影されている可能性があります。`
+        : `動画の見かけ上のfpsと、実際の撮影fpsが異なる（スロー撮影を書き出したファイルである）場合、
+           ここで実際の撮影fpsを指定すると、速度・加速度の計算に正しく反映されます。`;
+    const body = `
+        <p style="margin-bottom:6px;">${intro}</p>
+        <p style="font-size:0.8rem; color:#8A95A3; margin-bottom:8px;">
+            カメラの「設定 &gt; カメラ &gt; スローモーション撮影」で選んだfpsを入力してください。
+            分からない/スローで撮っていない場合は「通常速度」のままでOKです。
+        </p>
+        <div style="display:flex; gap:8px; margin-bottom:8px;">
+            <button class="btn btn-secondary" id="slowmo-preset-120" style="flex:1;">120fps</button>
+            <button class="btn btn-secondary" id="slowmo-preset-240" style="flex:1;">240fps</button>
+            <button class="btn btn-secondary" id="slowmo-preset-none" style="flex:1;">通常速度</button>
+        </div>
+        <label style="font-size:0.85rem;">実際の撮影fps（任意入力）:
+            <input type="text" id="dialog-input-val" value="${current || ''}" placeholder="例: 240" style="width:100%; margin-top:4px;">
+        </label>
+    `;
+    showInputDialog('スロー設定', body, current || '', (val) => setSlowMotionCaptureFps(val));
+    const presetBtn = (id, v) => {
+        const b = document.getElementById(id);
+        if (b) b.addEventListener('click', () => { document.getElementById('dialog-input-val').value = v; });
+    };
+    presetBtn('slowmo-preset-120', '120');
+    presetBtn('slowmo-preset-240', '240');
+    presetBtn('slowmo-preset-none', '');
+}
+
+function setupSlowMotionUI() {
+    const btn = document.getElementById('btn-set-slowmo');
+    if (btn) btn.addEventListener('click', () => openSlowMotionDialog(false));
+}
+
+// --- スロー撮影の"痕跡"を軽量に検出する（ベストエフォート・厳密パース不要） -----
+// iOS/iPadOS18+のスロー動画には com.apple.quicktime.full-frame-rate-playback-intent
+// というQuickTimeキーが付くことがある（0ならスロー再生意図）。正確な値までは
+// パースせず、「そのキー文字列がファイル中に存在するか」だけを見るヒントに留める
+// （Q4で合意した通り、誤検出しても実害はヒントの有無だけなので厳密なボックス解析は行わない）。
+// moov(メタデータ)は先頭 or 末尾寄りにあることが多いので、両端の数MBだけ走査すれば
+// 100MB超の動画でも全部デコードせずに済む。
+const SLOWMO_HINT_KEY = 'com.apple.quicktime.full-frame-rate-playback-intent';
+const SLOWMO_SCAN_BYTES = 4 * 1024 * 1024;
+async function detectSlowMotionHint(blob) {
+    if (!blob || typeof blob.slice !== 'function') return false;
+    try {
+        const head = await blob.slice(0, SLOWMO_SCAN_BYTES).arrayBuffer();
+        if (containsAscii(head, SLOWMO_HINT_KEY)) return true;
+        if (blob.size > SLOWMO_SCAN_BYTES) {
+            const tail = await blob.slice(Math.max(0, blob.size - SLOWMO_SCAN_BYTES), blob.size).arrayBuffer();
+            if (containsAscii(tail, SLOWMO_HINT_KEY)) return true;
+        }
+    } catch (e) { /* 読めなければヒント無しとして無視 */ }
+    return false;
+}
+function containsAscii(buf, needle) {
+    const bytes = new Uint8Array(buf);
+    const pat = new TextEncoder().encode(needle);
+    outer:
+    for (let i = 0; i <= bytes.length - pat.length; i++) {
+        for (let j = 0; j < pat.length; j++) {
+            if (bytes[i + j] !== pat[j]) continue outer;
+        }
+        return true;
+    }
+    return false;
 }
 
 // 再生/一時停止アイコンの切替（共通化）
@@ -2064,18 +2204,12 @@ function physCoordOf(p) {
     return { x, y, t: p.time, frame: p.frame, id: p.id };
 }
 
-// 中心差分で速度・加速度を数値微分（端点は片側差分）。
-// トラッキングは毎コマ打つとは限らず、コマ飛ばし（ステップ幅>1・手動ジャンプ）で
-// 前後の間隔 h0=t[i]-t[i-1] と h1=t[i+1]-t[i] が不揃いになることが普通にある。
-// 単純な (y[i+1]-y[i-1])/(t[i+1]-t[i-1]) は h0=h1 のときしか正しくなく、
-// 不揃いだと点ごとに符号・大きさが変わる誤差が乗ってガタつく。
-// 不等間隔に対応した3点公式（h0=h1なら現行式と完全一致、等加速度運動なら
-// 間隔がどれだけ不揃いでも理論上厳密値になる）に置き換える。
-function computeKinematics(sortedData) {
-    const pts = sortedData.map(physCoordOf);
-    const n = pts.length;
-    const t = pts.map(p => p.t);
-    const deriv = (arr) => arr.map((_, i) => {
+// 不等間隔対応の3点公式で片方の微分を厳密に求める（端点は片側差分）。
+// h0=h1なら単純な中心差分と完全一致、等加速度運動なら間隔がどれだけ
+// 不揃いでも理論上厳密値になる。ただし3点だけの厳密内挿なので、
+// クリック誤差（ノイズ）はそのまま増幅されて出る（StageE以前の唯一の方式）。
+function derivExact(t, arr, n) {
+    return arr.map((_, i) => {
         if (n === 1) return 0;
         if (i === 0)       return (arr[1] - arr[0]) / ((t[1] - t[0]) || 1e-9);
         if (i === n - 1)   return (arr[n - 1] - arr[n - 2]) / ((t[n - 1] - t[n - 2]) || 1e-9);
@@ -2084,6 +2218,56 @@ function computeKinematics(sortedData) {
         if (!denom) return (arr[i + 1] - arr[i - 1]) / ((t[i + 1] - t[i - 1]) || 1e-9);
         return (h0 * h0 * (arr[i + 1] - arr[i]) + h1 * h1 * (arr[i] - arr[i - 1])) / denom;
     });
+}
+
+// [lo,hi]区間の点にτ=t[k]-t[centerIdx]として2次関数を最小二乗フィットし、
+// τ=0(=対象点)での微分値(1次係数)を返す。窓がちょうど3点なら、その3点を
+// 厳密に通る唯一の2次関数になるため derivExact と同じ結果になる（後方互換）。
+// 4点以上なら過剰決定の最小二乗になり、点ごとのクリック誤差を平均化できる。
+function quadraticFitDerivativeAt(t, arr, lo, hi, centerIdx) {
+    let S0 = 0, S1 = 0, S2 = 0, S3 = 0, S4 = 0, T0 = 0, T1 = 0, T2 = 0;
+    const t0 = t[centerIdx];
+    for (let k = lo; k <= hi; k++) {
+        const tau = t[k] - t0, tau2 = tau * tau;
+        S0++; S1 += tau; S2 += tau2; S3 += tau2 * tau; S4 += tau2 * tau2;
+        T0 += arr[k]; T1 += tau * arr[k]; T2 += tau2 * arr[k];
+    }
+    // 正規方程式 [S4 S3 S2; S3 S2 S1; S2 S1 S0][a;b;c] = [T2;T1;T0] をクラメルの公式で解く。
+    // 欲しいのは1次係数bのみ（=τ=0での微分値）。
+    const det3 = (m) => m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+    const D = det3([S4, S3, S2, S3, S2, S1, S2, S1, S0]);
+    if (!D) return (arr[hi] - arr[lo]) / ((t[hi] - t[lo]) || 1e-9); // 縮退時のフォールバック
+    const Db = det3([S4, T2, S2, S3, T1, S1, S2, T0, S0]); // bの列をRHSに置換
+    return Db / D;
+}
+
+// 前後2点＝計5点の窓で2次回帰し、その微分値を速度・加速度として採用する
+// （境界に近い点は窓が片側に縮む）。窓の点数が3未満(=全体でn<3)の場合のみ
+// derivExactにフォールバックする。
+const KINEMATICS_WINDOW_HALF = 2;
+function derivSmoothed(t, arr, n) {
+    if (n < 3) return derivExact(t, arr, n);
+    return arr.map((_, i) => {
+        const lo = Math.max(0, i - KINEMATICS_WINDOW_HALF);
+        const hi = Math.min(n - 1, i + KINEMATICS_WINDOW_HALF);
+        return quadraticFitDerivativeAt(t, arr, lo, hi, i);
+    });
+}
+
+// 位置→速度→加速度の数値微分。
+// トラッキングは毎コマ打つとは限らず、コマ飛ばし（ステップ幅>1・手動ジャンプ）で
+// 前後の間隔が不揃いになることが普通にある。特に+1コマと+10コマ等を同じ対象で
+// 混在させると、区間比が極端な点でderivExact(3点厳密内挿)はノイズを増幅しやすい。
+// 既定ではderivSmoothed(窓付き最小二乗)を使い、appState.rawKinematics=trueの
+// 時だけderivExactに切り替える（精度検証や上級者向け）。
+function computeKinematics(sortedData, smoothedOverride) {
+    const smoothed = (smoothedOverride !== undefined) ? smoothedOverride : !appState.rawKinematics;
+    const pts = sortedData.map(physCoordOf);
+    const n = pts.length;
+    const t = pts.map(p => p.t);
+    const deriv = smoothed
+        ? (arr) => derivSmoothed(t, arr, n)
+        : (arr) => derivExact(t, arr, n);
     const x = pts.map(p => p.x), y = pts.map(p => p.y);
     const vx = deriv(x), vy = deriv(y);
     const ax = deriv(vx), ay = deriv(vy);
@@ -2091,7 +2275,8 @@ function computeKinematics(sortedData) {
         t: t[i], x: x[i], y: y[i],
         vx: vx[i], vy: vy[i], v: Math.hypot(vx[i], vy[i]),
         ax: ax[i], ay: ay[i], a: Math.hypot(ax[i], ay[i]),
-        id: p.id, frame: p.frame
+        id: p.id, frame: p.frame,
+        smoothed
     }));
 }
 
@@ -2132,7 +2317,21 @@ function setupGraphEvents() {
         persistGraphTypes(getSelectedGraphTypes());
         updateGraph();
     });
+
+    // 生データ/スムージング切替（既定はスムージングON＝チェックOFF）
+    const rawChk = document.getElementById('chk-raw-kinematics');
+    if (rawChk) {
+        try { rawChk.checked = localStorage.getItem(RAW_KINEMATICS_KEY) === '1'; } catch (e) { /* 無視 */ }
+        appState.rawKinematics = rawChk.checked;
+        rawChk.addEventListener('change', () => {
+            appState.rawKinematics = rawChk.checked;
+            try { localStorage.setItem(RAW_KINEMATICS_KEY, rawChk.checked ? '1' : '0'); } catch (e) { /* 無視 */ }
+            updateGraph();
+            logDebug(appState.rawKinematics ? '生データ表示に切替（スムージングなし）' : 'スムージング表示に切替');
+        });
+    }
 }
+const RAW_KINEMATICS_KEY = 'tracker_for_ipad_raw_kinematics_v1';
 
 // 1枚のグラフ canvas にクリックハンドラを取り付ける（当たり判定座標は canvas._plotPoints）
 function attachGraphClick(cv) {
@@ -2376,13 +2575,21 @@ function buildExportTable() {
                 round(k.ax, 3), round(k.ay, 3), round(k.a, 3)]);
         });
     });
-    return { header, rows };
+    // 後から見て「どの条件で出力したか」が分かるよう、先頭にメモ行を付ける
+    // （旧バージョンで書き出したデータかどうかを見分けられず苦労した反省。StageE参照）。
+    const notes = [
+        `# ${APP_VERSION} / 速度・加速度: ${appState.rawKinematics ? '生データ（スムージングなし）' : `スムージングあり（前後${KINEMATICS_WINDOW_HALF}点=計${KINEMATICS_WINDOW_HALF * 2 + 1}点の2次回帰）`}`,
+        appState.slowMotionCaptureFps
+            ? `# スロー補正: 撮影${appState.slowMotionCaptureFps}fps相当 (${appState.physicsFpsMultiplier.toFixed(3)}倍)`
+            : '# スロー補正: なし（通常速度として計算）'
+    ];
+    return { header, rows, notes };
 }
 
 function round(v, d) { const m = Math.pow(10, d); return Math.round(v * m) / m; }
 
 function tableToTSV(table) {
-    const lines = [table.header.join('\t')];
+    const lines = [...(table.notes || []), table.header.join('\t')];
     table.rows.forEach(r => lines.push(r.join('\t')));
     return lines.join('\n') + '\n';
 }
@@ -2426,7 +2633,8 @@ function setupExport() {
         const xlsxBtn = document.getElementById('btn-download-xlsx');
         if (xlsxBtn && hasXlsx) {
             xlsxBtn.addEventListener('click', () => {
-                const ws = XLSX.utils.aoa_to_sheet([table.header, ...table.rows]);
+                const noteRows = (table.notes || []).map(n => [n]);
+                const ws = XLSX.utils.aoa_to_sheet([...noteRows, table.header, ...table.rows]);
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, 'tracking');
                 XLSX.writeFile(wb, 'tracking_data.xlsx');
@@ -2444,11 +2652,36 @@ function setupExport() {
 // canvas総メモリ上限≈384MB対策）。
 const STROBE_MAX_DIM = 4096; // iOS Safariのcanvas1辺上限（安全側）
 
+// 「Nコマおき」を打刻順のインデックスではなく、時間的な等間隔で選ぶ。
+// +1/+10混在等で打刻自体が不等間隔でも、ストロボ写真は正しく等間隔になる。
+// 目標時刻(先頭点の時刻からN/実効fps刻み)に最も近い実打刻点を選び、
+// 目標間隔の半分を超えて離れている場合はその回を静かにスキップする
+// （無理に遠い点を採用すると「見た目は等間隔だが実は違う」という最悪の結果になるため）。
 function strobePoints(everyN) {
-    return appState.trackingData
+    const pts = appState.trackingData
         .filter(p => p.objectId === appState.activeObjectId && inAnalysisRange(p.frame))
-        .sort((a, b) => a.frame - b.frame)
-        .filter((p, i) => i % everyN === 0);
+        .sort((a, b) => a.frame - b.frame);
+    if (pts.length < 2) return pts;
+
+    const effectiveFps = appState.videoFps * (appState.physicsFpsMultiplier || 1);
+    const targetDt = everyN / effectiveFps;
+    const tol = targetDt / 2;
+    const lastT = pts[pts.length - 1].time;
+
+    const out = [];
+    let targetT = pts[0].time;
+    let guard = 0;
+    const guardMax = pts.length * 20 + 100; // 無限ループ対策（通常は到達しない）
+    while (targetT <= lastT + tol && guard++ < guardMax) {
+        let best = null, bestDiff = Infinity;
+        for (const p of pts) {
+            const diff = Math.abs(p.time - targetT);
+            if (diff < bestDiff) { bestDiff = diff; best = p; }
+        }
+        if (best && bestDiff <= tol && out[out.length - 1] !== best) out.push(best);
+        targetT += targetDt;
+    }
+    return out;
 }
 
 async function generateStrobe(canvas, everyN, radius, onProgress) {
@@ -2498,7 +2731,7 @@ function setupStrobe() {
             <p style="margin-bottom:6px;">追跡点のコマを重ねてストロボ写真を作ります。</p>
             <canvas id="strobe-preview" style="width:100%; border:1px solid #2B333D; border-radius:5px; background:#0F1216;"></canvas>
             <div style="display:flex; gap:14px; margin-top:8px; font-size:0.8rem;">
-                <label style="flex:1;">間引き（1/N点）: <span id="strobe-n-val">1</span>
+                <label style="flex:1;">間引き（約Nコマおき・時間等間隔）: <span id="strobe-n-val">1</span>
                     <input type="range" id="strobe-n" min="1" max="10" value="1" style="width:100%;">
                 </label>
                 <label style="flex:1;">パッチ半径(px): <span id="strobe-r-val">60</span>
@@ -2681,6 +2914,12 @@ if (typeof module !== 'undefined') {
         stepFrame,
         sampleColor,
         computeKinematics,
+        derivExact,
+        derivSmoothed,
+        strobePoints,
+        setSlowMotionCaptureFps,
+        buildExportTable,
+        tableToTSV,
         test_setVars
     };
 }

@@ -9,7 +9,8 @@
 - TSVコピー＋xlsxダウンロード、Undo＋自動保存
 
 ## 使い方
-- 生徒: 配布URLを開くだけ（インストール不要、動画は端末内で処理）。
+- 生徒: 公開ページ **<https://phys-ken.github.io/tracker-for-ipad/>** を開くだけ
+  （インストール不要、動画は端末内で処理されサーバーには送信されません）。
 - ローカル: `python serve.py` → `http://localhost:8000`。
 
 詳しい操作は **[MANUAL.md](MANUAL.md)** を参照。

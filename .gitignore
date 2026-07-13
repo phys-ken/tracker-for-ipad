@@ -4,6 +4,12 @@ reference/
 # 診断用の一時スクショ（意図的な公開アセットではない）
 image.png
 
+# ユーザーが動作確認・分析用に持ち込んだ個人の撮影データ／書き出しデータ
+# （IMG_XXXX.MOV はiPhone/iPad撮影のデフォルト命名。samples/配下の同梱サンプルは対象外）
+IMG_*.MOV
+IMG_*.mov
+*.xlsx
+
 # Node / テスト
 node_modules/
 package-lock.json

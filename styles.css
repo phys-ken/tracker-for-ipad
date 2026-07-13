@@ -362,7 +362,8 @@ body {
     border-radius: 1px;
 }
 
-.setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.setup-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.setup-grid .btn { font-size: 0.82rem; padding-left: 6px; padding-right: 6px; }
 
 /* 物体選択（色ボタン） */
 .object-selector { display: flex; gap: 6px; margin-top: 4px; }

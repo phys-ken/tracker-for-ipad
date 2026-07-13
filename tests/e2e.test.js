@@ -279,9 +279,13 @@ async function waitUntil(cdp, S, expr, timeoutMs, label) {
             const ta = document.querySelector('#dialog-body textarea');
             const tsv = ta ? ta.value : '';
             document.getElementById('dialog-btn-cancel').click();
-            return { hasTextarea: !!ta, head: tsv.split('\\n')[0], lines: tsv.trim().split('\\n').length };
+            const allLines = tsv.trim().split('\\n');
+            return { hasTextarea: !!ta, allLines, lines: allLines.length };
         `);
-        ok(exp.hasTextarea && /object_id\tframe/.test(exp.head), '出力TSVに正しいヘッダが含まれる');
+        // StageE以降、先頭にスムージング/スロー補正の状態を示すメモ行(#始まり)が付くため、
+        // ヘッダは「先頭行」固定ではなく「object_idで始まる行」として探す。
+        const headerLine = exp.hasTextarea ? exp.allLines.find(l => /^object_id\tframe/.test(l)) : null;
+        ok(exp.hasTextarea && !!headerLine, '出力TSVに正しいヘッダが含まれる');
         ok(exp.lines >= 4, `出力TSVにヘッダ+データ行がある (${exp.lines}行)`);
 
         // 単位が cm 表記 (スケール設定済みなので)
